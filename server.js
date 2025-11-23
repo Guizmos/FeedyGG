@@ -1068,7 +1068,7 @@ async function syncCategory(catKey) {
   return items.length;
 }
 
-function purgeOldItems(maxAgeHours = 48) {
+function purgeOldItems(maxAgeHours = 168) {
   const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000; // 48h par défaut
 
   const stmt = db.prepare(`

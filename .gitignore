@@ -12,6 +12,10 @@ npm-debug.log*
 # Config locales
 .env
 
+#script
+.ps1
+
 # Synology metadata
 @eaDir/
 public/@eaDir/
+
