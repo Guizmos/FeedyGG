@@ -1,0 +1,27 @@
+services:
+  yggfeed-db:
+    build: .
+    container_name: YGGFEED
+    environment:
+      - TZ=Europe/Paris
+      - RSS_PASSKEY=gtvewHZYhHUYujHZdJSvvYkeGiF2jMmq
+      #- RSS_PASSKEY=YUkHrWSoi1fq2ExcIFUbFEXfIgCeMxey
+      - RSS_MOVIES_ID=2183
+      - RSS_SERIES_ID=2184
+      - RSS_SHOWS_ID=2182
+      - RSS_ANIMATION_ID=2178
+      - RSS_SPECTACLE_ID=2185
+      - RSS_GAMES_ID=2161
+      - TMDB_API_KEY=9473f9eea4b6dd3f3684cb3918dd1327
+      - IGDB_CLIENT_ID=0fyvnm8ul1o28lce3oddf2opxunno5
+      - IGDB_CLIENT_SECRET=iiexrrq0o8kdytf0jn03u86zuijpaz
+      - DB_PATH=/data/yggfeed.db
+      - SYNC_INTERVAL_MINUTES=30
+      - LOG_FILE=/data/yggfeed.log
+      - LOG_MAX_BYTES=5242880 
+    volumes:
+      - /volume1/Docker/FeedyGG/data:/data
+      - /volume1/Docker/FeedyGG/public:/usr/src/app/public
+    ports:
+      - 7070:8080
+    restart: unless-stopped

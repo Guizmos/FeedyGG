@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>FeedYGG</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="favicon.png" />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="logo">
+        <span class="logo-main">YGG</span>
+        <span class="logo-sub">Feed</span>
+      </div>
+
+      <div class="controls">
+        <!-- MODE FILTRES -->
+        <div id="filters-container" class="filters-container">
+          <button id="search-toggle" class="controls-search-btn" title="Recherche">
+            <span class="icon-glyph material-symbols-rounded">search</span>
+          </button>
+
+          <label>
+            Catégorie:
+            <select id="category-select" class="pill-select"></select>
+          </label>
+
+          <label>
+            Résultats:
+            <select id="limit-select" class="pill-select">
+              <option value="3" selected>3</option>
+              <option value="9">9</option>
+              <option value="all">Tout</option>
+            </select>
+          </label>
+
+          <label>
+            Tri:
+            <select id="sort-select" class="pill-select">
+              <option value="seeders" selected>Seeders</option>
+              <option value="date">Date d'ajout</option>
+              <option value="name">Nom</option>
+            </select>
+          </label>
+        </div>
+
+        <!-- MODE RECHERCHE -->
+        <div id="search-container" class="search-container hidden">
+          <button id="filters-mini" class="filters-mini" title="Filtres">
+            <span class="icon-glyph material-symbols-rounded">tune</span>
+          </button>
+
+          <div class="search-input-shell">
+            <span class="search-icon icon-glyph material-symbols-rounded">search</span>
+            <input
+              id="search-input"
+              class="search-input"
+              type="text"
+              placeholder="Rechercher dans les résultats…"
+              autocomplete="off"
+            />
+            <button id="search-clear" class="search-clear-btn" type="button">
+              <span class="icon-glyph material-symbols-rounded">close</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="header-actions-group">
+          <button id="refresh-btn" class="header-btn" title="Rafraîchir">
+            <span class="icon-glyph material-symbols-rounded">refresh</span>
+          </button>
+          <button id="settings-btn" class="header-btn" title="Paramètres">
+            <span class="icon-glyph material-symbols-rounded">settings</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div id="stats" class="stats"></div>
+      <div id="loading" class="loading hidden">
+        <span class="loading-spinner"></span>
+        <span>Chargement du flux…</span>
+      </div>
+      <div id="error" class="error hidden"></div>
+      <div id="empty" class="empty hidden">Aucun résultat.</div>
+      <div id="cards"></div>
+    </main>
+  </div>
+
+  <!-- Overlay paramètres -->
+  <div id="settings-overlay" class="settings-overlay hidden"></div>
+
+  <!-- Modal paramètres -->
+  <div id="settings-modal" class="settings-modal hidden">
+    <h2>Paramètres</h2>
+
+    <!-- Thème -->
+    <div class="settings-row">
+      <div class="settings-row-main">
+        <span class="settings-icon material-symbols-rounded">dark_mode</span>
+        <div class="settings-text">
+          <label for="theme-select" class="settings-label">Thème</label>
+          <div class="settings-subtitle">Choisir l'apparence de l'interface</div>
+        </div>
+      </div>
+      <div class="settings-center">
+        <select id="theme-select" class="pill-select">
+          <option value="system">Système</option>
+          <option value="light">Clair</option>
+          <option value="dark">Sombre</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Tri par défaut -->
+    <div class="settings-row">
+      <div class="settings-row-main">
+        <span class="settings-icon material-symbols-rounded">sort</span>
+        <div class="settings-text">
+          <label for="default-sort-select" class="settings-label">Tri par défaut</label>
+          <div class="settings-subtitle">Ordre appliqué au chargement du flux</div>
+        </div>
+      </div>
+      <div class="settings-center">
+        <select id="default-sort-select" class="pill-select">
+          <option value="seeders">Seeders</option>
+          <option value="date">Date d'ajout</option>
+          <option value="name">Nom</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div class="settings-row">
+      <div class="settings-row-main">
+        <span class="settings-icon material-symbols-rounded">list_alt</span>
+        <div class="settings-text">
+          <span class="settings-label">Logs</span>
+          <div class="settings-subtitle">Consulter l'historique des opérations</div>
+        </div>
+      </div>
+      <div class="settings-center">
+        <button id="open-logs" class="btn-logs">Afficher les logs</button>
+      </div>
+    </div>
+
+    <div class="settings-footer">
+      <button id="close-settings" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Overlay logs -->
+  <div id="logs-overlay" class="settings-overlay hidden"></div>
+
+  <!-- Modal logs -->
+  <div id="logs-modal" class="settings-modal logs-modal hidden">
+    <h2>Logs YGGFeed</h2>
+
+    <div id="logs-content" class="logs-content">
+      Chargement des logs…
+    </div>
+
+    <div class="settings-footer">
+      <button id="close-logs" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Overlay fiche détails -->
+  <div id="details-overlay" class="settings-overlay hidden"></div>
+
+  <!-- Modal fiche détails -->
+  <div id="details-modal" class="settings-modal details-modal hidden">
+    <div class="details-layout">
+      <div class="details-poster-shell">
+        <img id="details-poster" class="details-poster" alt="Affiche" />
+        <div id="details-poster-fallback" class="details-poster-fallback hidden">
+          Affiche
+        </div>
+      </div>
+
+      <div class="details-content">
+        <h2 id="details-title" class="details-title"></h2>
+
+        <div id="details-meta" class="details-meta"></div>
+
+        <p id="details-plot" class="details-plot"></p>
+
+        <div id="details-extra" class="details-extra"></div>
+
+        <a
+          id="details-imdb-link"
+          class="details-imdb-link hidden"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+        </a>
+      </div>
+    </div>
+
+    <div class="settings-footer details-footer">
+      <button id="details-close" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

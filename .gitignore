@@ -1,0 +1,17 @@
+# Données runtime (DB + logs)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Config locales
+.env
+
+# Synology metadata
+@eaDir/
+public/@eaDir/
