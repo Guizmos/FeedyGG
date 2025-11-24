@@ -608,6 +608,7 @@ document.addEventListener("DOMContentLoaded", () => {
     overlay.classList.remove("hidden");
     modal.classList.remove("hidden");
     requestAnimationFrame(() => modal.classList.add("show"));
+    document.body.classList.add("no-scroll");
   }
 
   function closeSettings() {
@@ -616,6 +617,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       overlay.classList.add("hidden");
       modal.classList.add("hidden");
+      document.body.classList.remove("no-scroll");
     }, 200);
   }
 
@@ -684,6 +686,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logsOverlay.classList.remove("hidden");
     logsModal.classList.remove("hidden");
     requestAnimationFrame(() => logsModal.classList.add("show"));
+    document.body.classList.add("no-scroll");
     loadLogs();
   }
 
@@ -693,6 +696,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       logsOverlay.classList.add("hidden");
       logsModal.classList.add("hidden");
+      document.body.classList.remove("no-scroll");
     }, 200);
   }
 
@@ -708,6 +712,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       detailsOverlay.classList.add("hidden");
       detailsModal.classList.add("hidden");
+      document.body.classList.remove("no-scroll");
     }, 200);
   }
 
@@ -862,6 +867,7 @@ document.addEventListener("DOMContentLoaded", () => {
     detailsOverlay.classList.remove("hidden");
     detailsModal.classList.remove("hidden");
     requestAnimationFrame(() => detailsModal.classList.add("show"));
+    document.body.classList.add("no-scroll");
 
     fetchAndFillDetails(item, effectiveCat);
   }

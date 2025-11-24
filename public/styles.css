@@ -743,7 +743,7 @@ body {
 .card-actions {
   margin-top: auto;
   display: flex;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 6px;
 }
 
@@ -1338,6 +1338,13 @@ body {
   font-size: 12px;
   font-weight: 500;
   color: var(--accent);
+}
+
+/* Bloque le scroll du body quand une modale est ouverte */
+body.no-scroll {
+  height: 100vh;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 /* ====================================================================== */
