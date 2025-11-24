@@ -1,7 +1,7 @@
 # FeedYGG
 <img width="167" height="68" alt="image" src="https://github.com/user-attachments/assets/e15891a1-e6e6-4611-9956-34888aa6286c" />
 
-FeedYGG est une application **self-hosted** qui agrège et enrichit les flux RSS de YggTorrent pour les rendre enfin **lisibles, filtrables et sexy**.  
+FeedYGG est une application **self-hosted** qui agrège et enrichit les flux RSS de YggAPI pour les rendre enfin **lisibles, filtrables et sexy**.  
 L’app récupère les flux (films, séries, émissions TV, animation, spectacles, jeux vidéo), les stocke dans une base SQLite et les affiche dans une interface moderne et responsive.
 
 👉 Objectif : avoir **un tableau de bord propre** pour surveiller les derniers ajouts YGG, avec tri, filtres, infos enrichies (TMDB / IGDB) et historique persistant.
