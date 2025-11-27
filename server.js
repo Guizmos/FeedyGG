@@ -40,13 +40,12 @@ const IGDB_CLIENT_SECRET = process.env.IGDB_CLIENT_SECRET || "";
 const IGDB_BASE_URL = "https://api.igdb.com/v4";
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "yggfeed.db");
-const SYNC_INTERVAL_MINUTES = Number(process.env.SYNC_INTERVAL_MINUTES || 10); // ex: 10 min
+const SYNC_INTERVAL_MINUTES = Number(process.env.SYNC_INTERVAL_MINUTES || 10);
 
-const LOG_FILE =
-  process.env.LOG_FILE || path.join(__dirname, "yggfeed.log");
-const LOG_MAX_BYTES = Number(
-  process.env.LOG_MAX_BYTES || 5 * 1024 * 1024 // 5 Mo
-);
+const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "yggfeed.log");
+const LOG_MAX_BYTES = Number(process.env.LOG_MAX_BYTES || 5 * 1024 * 1024);
+
+const DB_HISTORY_DAYS = Number(process.env.DB_HISTORY_DAYS || 7);
 
 // -----------------------------------------------------------------------------
 // LOGS → niveaux + fichier + rotation simple
@@ -1076,8 +1075,9 @@ async function syncCategory(catKey) {
   return items.length;
 }
 
-function purgeOldItems(maxAgeHours = 168) {
-  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000; // 48h par défaut
+function purgeOldItems(maxAgeDays = DB_HISTORY_DAYS) {
+  const days = Number.isFinite(maxAgeDays) && maxAgeDays > 0 ? maxAgeDays : DB_HISTORY_DAYS;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   const stmt = db.prepare(`
     DELETE FROM items
@@ -1093,7 +1093,7 @@ function purgeOldItems(maxAgeHours = 168) {
     "PURGE",
     `${deleted} anciens items supprimés (avant ${new Date(
       cutoff
-    ).toLocaleString("fr-FR")})`
+    ).toLocaleString("fr-FR")} | rétention = ${days} jours)`
   );
 
   return deleted;
@@ -1117,7 +1117,7 @@ async function syncAllCategories() {
     }
   }
 
-  purgedCount = purgeOldItems(48);
+  purgedCount = purgeOldItems();
 
   const parts = Object.entries(summary).map(
     ([key, count]) => `${key}=${count != null ? count : "?"}`
