@@ -1517,6 +1517,27 @@ body.no-scroll {
 /* RESPONSIVE                                                             */
 /* ====================================================================== */
 
+@media (max-height: 500px) and (orientation: landscape) {
+  body {
+    padding: 8px;
+  }
+
+  .app {
+    max-width: none;
+  }
+
+  .app-main {
+    margin-left: -8px;
+    margin-right: -8px;
+  }
+
+  .category-group {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+
 @media (max-width: 340px) {
 
   .card {
@@ -1561,7 +1582,7 @@ body.no-scroll {
   }
 }
 
-@media (max-width: 430px) {
+@media (max-width: 378px) {
   .category-group {
     padding: 12px 10px 14px;
   }
