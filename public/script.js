@@ -89,7 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- State pour le feed + la recherche ---
   let currentSearch = "";
   const feedState = {
-    mode: "single",        // "single" | "groups"
+    mode: "single",
     categoryLabel: "",
     items: [],
     groups: [],
@@ -114,7 +114,6 @@ document.addEventListener("DOMContentLoaded", () => {
     games: "Jeu vidéo",
   };
   
-  // Thème au démarrage
   const savedTheme = localStorage.getItem("theme") || "system";
   applyTheme(savedTheme);
   if (themeSelect) {
@@ -134,7 +133,54 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sortSelect) {
     sortSelect.value = savedDefaultSort;
   }
-  
+
+    // --- Boutons responsive "Télécharger" (texte ↔ icône) ---
+
+  const responsiveCards = [];
+
+function updateCardButtonMode(card) {
+  if (!card) return;
+
+  const rect = card.getBoundingClientRect();
+  const width = rect?.width || 0;
+
+  const viewportWidth =
+    window.innerWidth || document.documentElement.clientWidth || 0;
+
+  if (viewportWidth <= 370) {
+    card.classList.remove("card--compact");
+    card.classList.add("card--vertical");
+    return;
+  }
+
+  const ICON_THRESHOLD = 380;
+
+  if (width < ICON_THRESHOLD) {
+    card.classList.add("card--compact");
+  } else {
+    card.classList.remove("card--compact");
+  }
+
+  card.classList.remove("card--vertical");
+}
+
+  function setupCardResponsiveButtons(card) {
+    if (!card) return;
+
+    responsiveCards.push(card);
+    updateCardButtonMode(card);
+
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => updateCardButtonMode(card));
+      ro.observe(card);
+    }
+  }
+
+  // Fallback : on recalcule pour toutes les cartes au resize fenêtre
+  window.addEventListener("resize", () => {
+    responsiveCards.forEach(updateCardButtonMode);
+  });
+
   // --- Catégories ---
 
   async function initCategories() {
@@ -295,11 +341,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const card = document.createElement("div");
     card.className = "card";
   
-    // --- Déterminer la catégorie à afficher sur le bandeau ---
     let catKey = item.category;
   
-    // Si l'item n'a pas de catégorie, on utilise la catégorie sélectionnée,
-    // sauf si c'est "all" (vue globale)
     if (!catKey && categorySelect) {
       const currentCat = categorySelect.value;
       if (currentCat && currentCat !== "all") {
@@ -401,6 +444,15 @@ document.addEventListener("DOMContentLoaded", () => {
     btnDl.target = "_blank";
     btnDl.rel = "noopener noreferrer";
 
+    const btnDlIcon = document.createElement("a");
+    btnDlIcon.href = item.download || "#";
+    btnDlIcon.className = "btn-download-icon";
+    btnDlIcon.target = "_blank";
+    btnDlIcon.rel = "noopener noreferrer";
+    btnDlIcon.innerHTML = `
+      <span class="material-symbols-rounded">download</span>
+    `;
+
     const btnOpen = document.createElement("a");
     btnOpen.href = item.pageLink || "#";
     btnOpen.className = "btn btn-open";
@@ -430,22 +482,24 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       const spacer = document.createElement("div");
+      spacer.className = "card-actions-spacer";
       spacer.style.width = "16px";
       spacer.style.flex = "0 0 16px";
 
-      actions.append(btnDetails, spacer, btnDl, btnOpen);
+      actions.append(btnDetails, spacer, btnDl, btnDlIcon, btnOpen);
     } else {
-      actions.append(btnDl, btnOpen);
+      actions.append(btnDl, btnDlIcon, btnOpen);
     }
 
     body.append(actions);
-
     card.append(posterWrap, body);
+    setupCardResponsiveButtons(card);
+
     return card;
   }
   
-
   function renderItems(items) {
+    responsiveCards.length = 0;
     if (!items.length) {
       resultsEl.innerHTML = "";
       emptyEl.classList.remove("hidden");
@@ -466,6 +520,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   
   function renderGroups(groups) {
+    responsiveCards.length = 0;
     if (!Array.isArray(groups) || !groups.length) {
       renderItems([]);
       return;

@@ -675,7 +675,7 @@ body {
 .cards-grid {
   margin-top: 8px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(370px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
   gap: 18px;
 }
 
@@ -914,6 +914,12 @@ body {
   cursor: pointer;
   transition: all var(--transition-fast);
   text-decoration: none;
+
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .btn-download {
@@ -922,6 +928,31 @@ body {
   font-weight: 600;
 }
 
+.btn-download-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #020817;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-download-icon:hover {
+  filter: brightness(1.08);
+}
+
+.theme-light .btn-download-icon {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+/* Bouton ouvrir */
 .btn-open {
   background: transparent;
   color: var(--accent);
@@ -943,7 +974,6 @@ body {
   border-color: rgba(56, 189, 248, 0.8);
 }
 
-/* th�me clair */
 .theme-light .btn-details {
   background: transparent;
   color: var(--accent);
@@ -957,6 +987,13 @@ body {
   border-color: rgba(14, 165, 233, 0.9);
 }
 
+.card.card--compact .btn-download {
+  display: none;
+}
+
+.card.card--compact .btn-download-icon {
+  display: inline-flex;
+}
 
 /* ====================================================================== */
 /* SETTINGS + LOGS MODALS                                                 */
@@ -1008,7 +1045,6 @@ body {
   font-size: 1.35rem;
 }
 
-/* lignes internes : 2 colonnes (gauche = label + picto, droite = contr�le) */
 .settings-row {
   display: flex;
   align-items: center;
@@ -1026,13 +1062,11 @@ body {
   border-bottom: none;
 }
 
-/* l�ger hover */
 .settings-row:hover {
   background: rgba(15, 23, 42, 0.6);
   border-color: rgba(56, 189, 248, 0.5);
 }
 
-/* bloc gauche : ic�ne + textes */
 .settings-row-main {
   display: flex;
   align-items: center;
@@ -1040,7 +1074,6 @@ body {
   flex: 1;
 }
 
-/* picto rond */
 .settings-icon {
   width: 28px;
   height: 28px;
@@ -1056,7 +1089,6 @@ body {
     0 4px 10px rgba(15,23,42,0.45);
 }
 
-/* zone texte (titre + sous-titre) */
 .settings-text {
   display: flex;
   flex-direction: column;
@@ -1074,25 +1106,22 @@ body {
   opacity: 0.85;
 }
 
-/* colonne droite : contr�les align�s � droite + largeur fixe */
 .settings-center {
-  flex: 0 0 130px;       /* <-- ajuste ici si tu veux plus/moins large */
+  flex: 0 0 130px;
   display: flex;
   justify-content: flex-end;
 }
 
-/* m�mes dimensions pour select & bouton logs */
 .settings-modal .pill-select,
 .settings-modal .btn-logs {
   width: 130px;
-  min-width: 0px;      /* <-- � garder coh�rent avec flex ci-dessus */
+  min-width: 0px;
   min-height: 34px;
   border-radius: 999px;
   text-align: center;
   padding-inline: 14px;
 }
 
-/* variante clair */
 .theme-light .settings-row {
   border-bottom-color: rgba(148, 163, 184, 0.35);
 }
@@ -1106,14 +1135,12 @@ body {
   border-bottom-color: rgba(148, 163, 184, 0.35);
 }
 
-/* footer bouton fermer */
 .settings-footer {
   margin-top: 4px;
   display: flex;
   justify-content: flex-end;
 }
 
-/* bouton logs */
 .btn-logs {
   background: transparent;
   color: var(--accent);
@@ -1129,7 +1156,6 @@ body {
   background: var(--accent-soft);
 }
 
-/* bouton Fermer */
 .btn-close {
   background: var(--accent);
   color: #020817;
@@ -1145,7 +1171,6 @@ body {
   opacity: 0.9;
 }
 
-/* LOGS MODAL taille */
 .logs-modal {
   max-width: 1200px;
   width: 100%;
@@ -1169,7 +1194,6 @@ body {
   text-align: left;
 }
 
-/* chaque ligne de log */
 .log-line {
   padding: 2px 0;
   padding-left: 6px;
@@ -1177,19 +1201,16 @@ body {
   border-left: 2px solid transparent;
 }
 
-/* SYNC = vert */
 .log-line.log-sync {
   color: #4ade80;
   border-color: #22c55e;
 }
 
-/* PURGE = rouge */
 .log-line.log-purge {
   color: #f97373;
   border-color: #ef4444;
 }
 
-/* TMDB (tous les tags qui commencent par TMDB) = orange */
 .log-line.log-tmdb {
   color: #fb923c;
   border-color: #f97316;
@@ -1207,22 +1228,18 @@ body {
   color: var(--text);
 }
 
-/* ====================================================================== */
-/* MODALE FICHE DETAILS                                                   */
-/* ====================================================================== */
-
 .details-modal {
   width: min(1000px, calc(100% - 32px));
   max-width: 1000px;
-  margin: 0 auto;           /* m�me largeur qu'avant, pas plein �cran */
-  padding-top: 32px;        /* un peu plus d'espace au-dessus */
-  padding-bottom: 32px;     /* m�me marge en bas -> visuel centr� */
+  margin: 0 auto;
+  padding-top: 32px;
+  padding-bottom: 32px;
 }
 
 .details-layout {
   display: flex;
   gap: 24px;
-  align-items: center;      /* centre l�affiche par rapport au bloc texte */
+  align-items: center;
   justify-content: flex-start;
 }
 
@@ -1257,7 +1274,7 @@ body {
 }
 
 .details-content {
-  flex: 0 1 640px;     /* ne prend plus toute la largeur */
+  flex: 0 1 640px;
   max-width: 640px;
   display: flex;
   flex-direction: column;
@@ -1407,8 +1424,6 @@ button:focus {
   box-shadow: none !important;
 }
 
-/* ====================================================================== */
-
 .category-group {
   margin-top: 10px;
   padding: 16px 18px 20px;
@@ -1506,25 +1521,24 @@ button:focus {
   color: var(--accent);
 }
 
-/* Bloque le scroll du body quand une modale est ouverte */
 body.no-scroll {
   height: 100vh;
   overflow: hidden;
   overscroll-behavior: contain;
 }
 
+
 /* ====================================================================== */
 /* RESPONSIVE                                                             */
 /* ====================================================================== */
 
-@media (max-width: 370px) {
+@media (max-width: 380px) {
 
-  /* Carte en VERTICAL : affiche centrée, texte en dessous */
   .card {
-    flex-direction: column;   /* ← c'est ça qui manquait */
+    flex-direction: column;
     align-items: center;
     text-align: center;
-    padding-bottom: 12px;     /* plus besoin de gros padding bas ici */
+    padding-bottom: 12px;
   }
 
   .card-poster-wrap {
@@ -1539,7 +1553,7 @@ body.no-scroll {
     max-width: 260px;
     margin-left: auto;
     margin-right: auto;
-    text-align: left;         /* bloc centré mais texte aligné à gauche */
+    text-align: left;
   }
 
   .card-title {
@@ -1551,110 +1565,52 @@ body.no-scroll {
     text-align: left;
   }
 
+  /* --- BOUTONS --- */
+
   .card-actions {
-    flex-direction: column;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
     width: 100%;
     max-width: 260px;
     margin: 8px auto 0;
     align-items: stretch;
     gap: 6px;
+    justify-content: space-between;   /* important pour bien répartir */
   }
 
-  .btn {
-    width: 100%;
+  .card-actions .btn {
+    width: auto;
+    flex: 0 0 auto;
     text-align: center;
-  }
-}
-
-@media (max-width: 430px) and (min-width: 370px) {
-
-  .card {
-    padding-bottom: 56px;
-  }
-
-  .card-title-row {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-  }
-
-  .card-title {
-    padding-right: 0;
-    font-size: 14px;
-  }
-
-  .info-btn {
-    position: static;
-    align-self: flex-end;
-    margin-top: 2px;
-  }
-
-  .card-actions {
-    position: absolute;
-    left: 14px;
-    right: 14px;
-    bottom: 10px;
-
-    display: flex;
-    align-items: center;
-    gap: 6px;
-
-    justify-content: flex-end;
   }
 
   .card-actions .btn-details {
-    margin-right: auto;
+    flex: 0 0 100%;
   }
 
-  .btn {
-    padding: 5px 10px;
-    font-size: 11px;
-  }
-}
-
-@media (max-width: 1300px) {
-  body {
-    padding: 12px;
+  .card-actions .btn-download,
+  .card-actions .btn-open {
+    flex: 0 0 calc(50% - 3px);
   }
 
-  .app-main {
-    padding: 10px 10px 14px;
-    margin-left: -12px;
-    margin-right: -12px;
+    .card-actions > div {
+    /* c’est ton spacer */
+    display: none !important;
+  }
+  
+  /* on enlève le spacer éventuel */
+  .card-actions-spacer {
+    display: none !important;
   }
 
-  .category-group {
-    padding-left: 10px;
-    padding-right: 10px;
+  /* on force le bouton texte et on masque l’icône */
+  .card .btn-download-icon {
+    display: none !important;
   }
 
-  .cards-grid {
-    gap: 12px;
-  }
-}
-
-@media (max-width: 900px) and (orientation: landscape) {
-  body {
-    padding: 12px;
-  }
-
-  .app-main {
-    padding: 10px 10px 14px;
-    margin-left: -12px;
-    margin-right: -12px;
-  }
-
-  .category-group {
-    padding-left: 10px;
-    padding-right: 10px;
-  }
-
-  .cards-grid {
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    gap: 12px;
+  .card .btn-download {
+    display: inline-flex;
   }
 }
 
@@ -1888,3 +1844,23 @@ body.no-scroll {
   }
 }
 
+@media (max-width: 1300px) {
+  body {
+    padding: 12px;
+  }
+
+  .app-main {
+    padding: 10px 10px 14px;
+    margin-left: -12px;
+    margin-right: -12px;
+  }
+
+  .category-group {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .cards-grid {
+    gap: 12px;
+  }
+}
