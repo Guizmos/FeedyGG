@@ -497,12 +497,11 @@ body {
   height: var(--filters-pill-height);
   padding: 0 14px;
   border-radius: 999px;
-
-  background: rgba(255, 255, 255, 0.96);
-  border: var(--border-subtle);
+  background: rgba(9, 9, 20, 0.92);
+  border: 1px solid rgba(148, 163, 253, 0.35);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55);
   white-space: nowrap;
 }
 
@@ -690,9 +689,11 @@ body {
   height: var(--filters-pill-height);
   border-radius: 999px;
 
-  background: rgba(255,255,255,0.96);
-  border: var(--border-subtle);
+  background: rgba(9, 9, 20, 0.92);
+  border: 1px solid rgba(148, 163, 253, 0.35);
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55);
 }
 
 .date-filter-chip-label {

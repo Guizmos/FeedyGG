@@ -69,18 +69,30 @@ jobs:
       - name: Générer les notes de release
         id: notes
         run: |
-          TAG="${GITHUB_REF_NAME}"   # ex: v1.1.0
+          TAG="${GITHUB_REF_NAME}"   # ex: v1.1.1
 
-          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          # 1) On essaie d'utiliser le message du tag annoté (celui que tu saisis dans ton script)
+          TAG_MSG="$(git for-each-ref "refs/tags/${TAG}" --format='%(contents)' 2>/dev/null || echo "")"
+          TAG_MSG="$(echo "$TAG_MSG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="$PREV_TAG..$TAG"
+          if [ -n "$TAG_MSG" ]; then
+            echo "Tag annoté détecté, génération des notes depuis le message du tag."
+            # On met le message du tag tel quel dans un fichier "raw"
+            echo "$TAG_MSG" > raw-commits.txt
           else
-            RANGE="$TAG"
+            echo "Pas de message de tag annoté, on utilise les commits entre les tags."
+            PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+
+            if [ -n "$PREV_TAG" ]; then
+              RANGE="$PREV_TAG..$TAG"
+            else
+              RANGE="$TAG"
+            fi
+
+            git log --pretty=format:'%s' $RANGE > raw-commits.txt
           fi
 
-          git log --pretty=format:'%s' $RANGE > raw-commits.txt
-
+          # 2) Mise en forme : on split sur "+" → puces
           {
             echo "Changements pour ${TAG} :"
             echo
@@ -105,6 +117,5 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: ${{ steps.notes.outputs.body }}
-          # generate_release_notes: false   # on n’utilise plus les notes auto
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

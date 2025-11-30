@@ -63,6 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const searchClearBtn = document.getElementById("search-clear");
   const filtersMiniBtn = document.getElementById("filters-mini");
   const defaultSortSelect = document.getElementById("default-sort-select");
+  const defaultDateFilterSelect = document.getElementById("default-date-filter-select");
   const detailsOverlay = document.getElementById("details-overlay");
   const detailsModal = document.getElementById("details-modal");
   const detailsCloseBtn = document.getElementById("details-close");
@@ -77,8 +78,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const dateFilterPanel = document.getElementById("date-filter-panel");
   const activeDateFilterChip = document.getElementById("active-date-filter-chip");
   const DATE_FILTER_STORAGE_KEY = "dateFilterDays";
+  const DATE_FILTER_DEFAULT_STORAGE_KEY = "defaultDateFilterDays";
 
   let currentDateFilterDays = null;
+  let defaultDateFilterDays = 0;
 
   const footerEl = document.getElementById("app-footer");
   const appVersionEl = document.getElementById("app-version");
@@ -131,6 +134,23 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (sortSelect) {
     sortSelect.value = savedDefaultSort;
+  }
+
+  const savedDefaultDateFilter =
+    localStorage.getItem(DATE_FILTER_DEFAULT_STORAGE_KEY) || "0";
+
+  if (defaultDateFilterSelect) {
+    defaultDateFilterSelect.value = savedDefaultDateFilter;
+  }
+
+  defaultDateFilterDays = parseInt(savedDefaultDateFilter, 10);
+  if (Number.isNaN(defaultDateFilterDays) || defaultDateFilterDays < 0) {
+    defaultDateFilterDays = 0;
+  }
+
+  function getDateFilterDisplayLabel(days) {
+    if (!days || days <= 0) return "Tous";
+    return getDateFilterLabel(days) || "";
   }
 
   const responsiveCards = [];
@@ -649,14 +669,37 @@ function updateCardButtonMode(card) {
   function updateDateFilterChip() {
     if (!activeDateFilterChip) return;
 
-    if (!currentDateFilterDays || currentDateFilterDays <= 0) {
-      activeDateFilterChip.classList.add("hidden");
-      activeDateFilterChip.innerHTML = "";
+    const effectiveCurrent =
+      currentDateFilterDays && currentDateFilterDays > 0
+        ? currentDateFilterDays
+        : 0;
+
+    const effectiveDefault =
+      defaultDateFilterDays && defaultDateFilterDays > 0
+        ? defaultDateFilterDays
+        : 0;
+
+    const currentLabel = getDateFilterDisplayLabel(effectiveCurrent);
+    const defaultLabel = getDateFilterDisplayLabel(effectiveDefault);
+
+    if (effectiveCurrent === effectiveDefault) {
+      if (!defaultLabel) {
+        activeDateFilterChip.classList.add("hidden");
+        activeDateFilterChip.innerHTML = "";
+        return;
+      }
+
+      activeDateFilterChip.classList.remove("hidden");
+      activeDateFilterChip.innerHTML = `
+        <span class="stats-chip stats-chip-secondary date-filter-default-chip">
+          Période : ${defaultLabel}
+        </span>
+      `;
       return;
     }
 
-    const label = getDateFilterLabel(currentDateFilterDays);
-    if (!label) {
+    // 2) Valeur différente du défaut → bulle active avec badge (X)
+    if (!currentLabel) {
       activeDateFilterChip.classList.add("hidden");
       activeDateFilterChip.innerHTML = "";
       return;
@@ -666,15 +709,16 @@ function updateCardButtonMode(card) {
     activeDateFilterChip.innerHTML = `
       <div class="date-filter-chip-wrapper">
         <div class="date-filter-chip-inner">
-          <span class="date-filter-chip-label">${label}</span>
+          <span class="date-filter-chip-label">${currentLabel}</span>
         </div>
 
-        <button type="button" class="date-filter-chip-clear" title="Retirer ce filtre">
+        <button type="button" class="date-filter-chip-clear" title="Revenir au filtre par défaut">
           <span class="material-symbols-rounded">close</span>
         </button>
       </div>
     `;
   }
+
 
   function getUiLimit() {
     if (!limitSelect) return Infinity;
@@ -809,7 +853,17 @@ function updateCardButtonMode(card) {
     }
 
     if (dateFilterBtn) {
-      const hasActiveFilter = !!(currentDateFilterDays && currentDateFilterDays > 0);
+      const effectiveCurrent =
+        currentDateFilterDays && currentDateFilterDays > 0
+          ? currentDateFilterDays
+          : 0;
+
+      const effectiveDefault =
+        defaultDateFilterDays && defaultDateFilterDays > 0
+          ? defaultDateFilterDays
+          : 0;
+
+      const hasActiveFilter = effectiveCurrent !== effectiveDefault;
       dateFilterBtn.classList.toggle("active", hasActiveFilter);
     }
 
@@ -849,22 +903,32 @@ function updateCardButtonMode(card) {
     dateFilterPanel.innerHTML = `
       <div class="date-filter-inner">
         <div class="date-filter-pills">
-          <button class="date-filter-pill" data-days="0">Tous</button>
+          <button class="date-filter-pill" data-days="0">Tout</button>
           <button class="date-filter-pill" data-days="1">24h</button>
           <button class="date-filter-pill" data-days="2">48h</button>
           <button class="date-filter-pill" data-days="3">3 jours</button>
           <button class="date-filter-pill" data-days="7">7 jours</button>
         </div>
-        <button type="button" class="date-filter-reset">Réinitialiser</button>
       </div>
     `;
 
     const saved = localStorage.getItem(DATE_FILTER_STORAGE_KEY);
-    const savedDays = saved != null ? parseInt(saved, 10) : 0;
-    applyDateFilterSelection(
-      !savedDays || Number.isNaN(savedDays) || savedDays <= 0 ? 0 : savedDays,
-      { skipReload: true }
-    );
+
+    let initialDays = 0;
+
+    if (saved != null) {
+      const savedDays = parseInt(saved, 10);
+      initialDays =
+        !savedDays || Number.isNaN(savedDays) || savedDays <= 0 ? 0 : savedDays;
+    } else {
+      const def = localStorage.getItem(DATE_FILTER_DEFAULT_STORAGE_KEY);
+      const defDays = def != null ? parseInt(def, 10) : 0;
+      initialDays =
+        !defDays || Number.isNaN(defDays) || defDays <= 0 ? 0 : defDays;
+    }
+
+    applyDateFilterSelection(initialDays, { skipReload: true });
+
 
     dateFilterPanel.addEventListener("click", (e) => {
       const pill = e.target.closest(".date-filter-pill");
@@ -1304,6 +1368,15 @@ function updateCardButtonMode(card) {
     loadFeed();
   });
 
+  defaultDateFilterSelect?.addEventListener("change", (e) => {
+    const value = parseInt(e.target.value, 10) || 0;
+
+    defaultDateFilterDays = value;
+    localStorage.setItem(DATE_FILTER_DEFAULT_STORAGE_KEY, String(value));
+
+    applyDateFilterSelection(value);
+  });
+
   refreshBtn?.addEventListener("click", () => {
     loadFeed();
   });
@@ -1408,7 +1481,8 @@ function updateCardButtonMode(card) {
 
       e.preventDefault();
       e.stopPropagation();
-      applyDateFilterSelection(0);
+      // Retour au filtre par défaut configuré
+      applyDateFilterSelection(defaultDateFilterDays || 0);
     });
     await loadFeed();
     await initVersionFooter();
