@@ -1,6 +1,3 @@
-// server.js
-// Backend YGG Feed avec SQLite + scan intelligent
-
 const express = require("express");
 const Parser = require("rss-parser");
 const Database = require("better-sqlite3");
@@ -10,25 +7,15 @@ const path = require("path");
 const pkg = require("./package.json");
 const APP_VERSION = pkg.version;
 
-// -----------------------------------------------------------------------------
-// CONFIG ENV
-// -----------------------------------------------------------------------------
-
 const PORT = process.env.PORT || 8080;
 
 const RSS_PASSKEY = process.env.RSS_PASSKEY;
 
-// Films (par défaut: ancien RSS_ID ou 2183)
 const RSS_MOVIES_ID = process.env.RSS_MOVIES_ID || process.env.RSS_ID || "2183";
-// Séries TV
 const RSS_SERIES_ID = process.env.RSS_SERIES_ID || "2184";
-// Émissions TV
 const RSS_SHOWS_ID = process.env.RSS_SHOWS_ID || "2182";
-// Animation
 const RSS_ANIMATION_ID = process.env.RSS_ANIMATION_ID || "2178";
-// Jeux vidéo
 const RSS_GAMES_ID = process.env.RSS_GAMES_ID || "2161";
-// Spectacle
 const RSS_SPECTACLE_ID = process.env.RSS_SPECTACLE_ID || "2185";
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
@@ -59,7 +46,6 @@ const LOG_LEVELS = {
 
 let logCount = 0;
 
-// masque passkey / api_key dans tout ce qu'on log
 function maskSecrets(str) {
   if (str == null) return "";
   const s = String(str);
@@ -87,7 +73,7 @@ function rotateLogsIfNeeded() {
 
     const data = fs.readFileSync(LOG_FILE, "utf8");
     const lines = data.split(/\r?\n/).filter(Boolean);
-    const tail = lines.slice(-1000); // on garde les 1000 dernières lignes
+    const tail = lines.slice(-1000);
 
     fs.writeFileSync(LOG_FILE, tail.join("\n") + "\n", "utf8");
     console.log(
@@ -104,20 +90,16 @@ function writeLog(level, tag, message) {
   const safeMsg = maskSecrets(message || "");
   const line = `[${stamp}] [${level}] [${tag}] ${safeMsg}`;
 
-  // Affiché dans les logs Docker
   console.log(line);
 
-  // Append dans le fichier
   appendLogLine(line);
 
-  // Check périodique de la taille pour rotation
   logCount++;
   if (logCount % 50 === 0) {
     rotateLogsIfNeeded();
   }
 }
 
-// raccourcis
 const logInfo = (tag, msg) => writeLog(LOG_LEVELS.INFO, tag, msg);
 const logWarn = (tag, msg) => writeLog(LOG_LEVELS.WARN, tag, msg);
 const logError = (tag, msg) => writeLog(LOG_LEVELS.ERROR, tag, msg);
@@ -137,10 +119,8 @@ if (!RSS_PASSKEY) {
 
 const app = express();
 
-// static front (public/)
 app.use(express.static(path.join(__dirname, "public")));
 
-// Route pour exposer la version de l'appli
 app.get("/version", (req, res) => {
   res.json({ version: APP_VERSION });
 });
@@ -152,7 +132,6 @@ app.get("/version", (req, res) => {
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
-// Table principale
 db.exec(`
   CREATE TABLE IF NOT EXISTS items (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,7 +154,6 @@ db.exec(`
   );
 `);
 
-// Index pour accélérer les requêtes
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_items_category_date
     ON items (category, added_at_ts DESC);
@@ -208,7 +186,6 @@ const parser = new Parser({
 // HELPERS CATEGORIES / URL RSS
 // -----------------------------------------------------------------------------
 
-// Normalise les clés venant du front / interne
 function normalizeCategoryKey(raw) {
   const c = (raw || "film").toLowerCase();
 
@@ -258,11 +235,6 @@ function getRssConfigForCategoryKey(catKey) {
 // HELPERS TITRE / QUALITÉ / EPISODE
 // -----------------------------------------------------------------------------
 
-/**
- * Nettoie un titre YGG et tente d'en extraire:
- * - cleanTitle
- * - year
- */
 function guessTitleAndYear(rawTitle = "", kind = "film") {
   if (!rawTitle) {
     return { cleanTitle: "", year: null };
@@ -270,10 +242,8 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
 
   let t = rawTitle;
 
-  // Enlever blocs parasites entre [] (tags ripper, etc.)
   t = t.replace(/\[.*?\]/g, " ");
 
-  // Pour les séries: couper tout ce qui suit un token de type S01, S01E05, etc.
   if (kind === "series") {
     const seriesCutRegexes = [/\bS\d{1,2}E\d{1,3}\b/i, /\bS\d{1,2}\b/i];
     for (const re of seriesCutRegexes) {
@@ -285,10 +255,8 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
     }
   }
 
-  // Normaliser séparateurs
   t = t.replace(/[._]/g, " ");
 
-  // Chercher une année
   const yearMatch = t.match(/(19|20)\d{2}(?!\d)/);
   let year = null;
   let name = t;
@@ -298,7 +266,6 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
     name = t.slice(0, yearMatch.index).trim();
   }
 
-  // Tags techniques à virer
   const tags = [
     "HYBRID",
     "MULTI",
@@ -1126,6 +1093,46 @@ async function syncAllCategories() {
 
   logInfo("SYNC", `Résumé: ${parts.join(", ")}`);
   logInfo("SYNC", "Synchronisation globale terminée.");
+
+  return {
+    summary,
+    purged: purgedCount,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// SYNC API HELPERS (éviter plusieurs sync en parallèle)
+// -----------------------------------------------------------------------------
+
+let isSyncRunning = false;
+
+async function runGlobalSyncOnce() {
+  if (isSyncRunning) {
+    logWarn("SYNC", "Tentative de sync alors qu'une sync est déjà en cours.");
+    return {
+      alreadyRunning: true,
+    };
+  }
+
+  isSyncRunning = true;
+  const startedAt = Date.now();
+
+  try {
+    const result = await syncAllCategories();
+    const durationMs = Date.now() - startedAt;
+
+    return {
+      alreadyRunning: false,
+      startedAt,
+      durationMs,
+      ...result,
+    };
+  } catch (e) {
+    logError("SYNC", `Erreur pendant runGlobalSyncOnce: ${e.message}`);
+    throw e;
+  } finally {
+    isSyncRunning = false;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1193,6 +1200,37 @@ app.get("/api/logs", (req, res) => {
 
     res.json({ lines: tail });
   });
+});
+
+// -----------------------------------------------------------------------------
+// API SYNC (lance une synchro globale YGG -> SQLite)
+// -----------------------------------------------------------------------------
+
+app.post("/api/sync", async (req, res) => {
+  try {
+    const info = await runGlobalSyncOnce();
+
+    if (info.alreadyRunning) {
+      return res.status(409).json({
+        ok: false,
+        error: "Sync déjà en cours",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      running: false,
+      durationMs: info.durationMs,
+      summary: info.summary,
+      purged: info.purged,
+    });
+  } catch (err) {
+    logError("API_SYNC", `Erreur /api/sync: ${err.message}`);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur pendant la synchronisation",
+    });
+  }
 });
 
 // -----------------------------------------------------------------------------

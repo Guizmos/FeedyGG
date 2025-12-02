@@ -118,98 +118,224 @@
   <div id="settings-modal" class="settings-modal hidden">
     <h2>Paramètres</h2>
 
-    <!-- Thème -->
-    <div class="settings-row">
-      <div class="settings-row-main">
-        <span class="settings-icon material-symbols-rounded">dark_mode</span>
-        <div class="settings-text">
-          <label for="theme-select" class="settings-label">Thème</label>
-          <div class="settings-subtitle">Choisir l'apparence de l'interface</div>
-        </div>
-      </div>
-      <div class="settings-center">
-        <select id="theme-select" class="pill-select">
-          <option value="system">Système</option>
-          <option value="light">Clair</option>
-          <option value="dark">Sombre</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- Tri par défaut -->
-    <div class="settings-row">
-      <div class="settings-row-main">
-        <span class="settings-icon material-symbols-rounded">sort</span>
-        <div class="settings-text">
-          <label for="default-sort-select" class="settings-label">Tri par défaut</label>
-          <div class="settings-subtitle">Ordre appliqué au chargement du flux</div>
-        </div>
-      </div>
-      <div class="settings-center">
-        <select id="default-sort-select" class="pill-select">
-          <option value="seeders">Seeders</option>
-          <option value="date">Date d'ajout</option>
-          <option value="name">Nom</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- Filtre date par défaut -->
-    <div class="settings-row">
-      <div class="settings-row-main">
-        <div class="settings-icon">
-          <span class="material-symbols-rounded">schedule</span>
-        </div>
-        <div class="settings-text">
-          <div class="settings-label">Filtre par défaut</div>
-          <div class="settings-subtitle">
-            Période appliquée automatiquement au chargement.
+    <div class="settings-layout">
+      <!-- Sidebar à la Windows -->
+      <nav class="settings-sidebar">
+        <button class="settings-nav-item active" data-section="theme">
+          <span class="settings-nav-icon material-symbols-rounded">dark_mode</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Apparence</span>
+            <span class="settings-nav-sub">Thème de l’interface</span>
           </div>
-        </div>
-      </div>
+        </button>
 
-      <div class="settings-center">
-        <select id="default-date-filter-select" class="pill-select">
-          <option value="0">All</option>
-          <option value="1">24h</option>
-          <option value="2">48h</option>
-          <option value="3">3 jours</option>
-          <option value="7">7 jours</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- Affichage (taille des cartes) -->
-    <div class="settings-row">
-      <div class="settings-row-main">
-        <span class="settings-icon material-symbols-rounded">view_agenda</span>
-        <div class="settings-text">
-          <label for="card-size-select" class="settings-label">Affichage</label>
-          <div class="settings-subtitle">
-            Ajuster la densité d'affichage des résultats
+        <button class="settings-nav-item" data-section="display">
+          <span class="settings-nav-icon material-symbols-rounded">view_agenda</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Affichage</span>
+            <span class="settings-nav-sub">Densité des cartes</span>
           </div>
-        </div>
-      </div>
-      <div class="settings-center">
-        <select id="card-size-select" class="pill-select">
-          <option value="compact">Compact</option>
-          <option value="normal" selected>Normal</option>
-          <option value="large">Large</option>
-        </select>
-      </div>
-    </div>
+        </button>
 
-    <!-- Logs -->
-    <div class="settings-row">
-      <div class="settings-row-main">
-        <span class="settings-icon material-symbols-rounded">list_alt</span>
-        <div class="settings-text">
-          <span class="settings-label">Logs</span>
-          <div class="settings-subtitle">Consulter l'historique des opérations</div>
-        </div>
-      </div>
-      <div class="settings-center">
-        <button id="open-logs" class="btn-logs">Afficher les logs</button>
+        <button class="settings-nav-item" data-section="sort">
+          <span class="settings-nav-icon material-symbols-rounded">sort</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Tri par défaut</span>
+            <span class="settings-nav-sub">Ordre du flux</span>
+          </div>
+        </button>
+
+        <button class="settings-nav-item" data-section="date">
+          <span class="settings-nav-icon material-symbols-rounded">schedule</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Filtre par défaut</span>
+            <span class="settings-nav-sub">Période appliquée au chargement</span>
+          </div>
+        </button>
+
+        <button class="settings-nav-item" data-section="refresh">
+          <span class="settings-nav-icon material-symbols-rounded">refresh</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Rafraîchissement</span>
+            <span class="settings-nav-sub">Fréquence de mise à jour</span>
+          </div>
+        </button>
+
+        <button class="settings-nav-item" data-section="logs">
+          <span class="settings-nav-icon material-symbols-rounded">list_alt</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Logs</span>
+            <span class="settings-nav-sub">Historique des opérations</span>
+          </div>
+        </button>
+      </nav>
+
+      <!-- Contenu de droite, qui change selon la section -->
+      <div class="settings-content">
+        <!-- SECTION THEME -->
+        <section class="settings-section active" data-section="theme">
+          <h3 class="settings-section-title">Thème</h3>
+          <p class="settings-section-desc">
+            Choisissez comment l’interface s’adapte au mode clair/sombre.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">dark_mode</span>
+              <div class="settings-text">
+                <label for="theme-select" class="settings-label">Thème</label>
+                <div class="settings-subtitle">Choisir l'apparence de l'interface</div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <select id="theme-select" class="pill-select">
+                <option value="system">Système</option>
+                <option value="light">Clair</option>
+                <option value="dark">Sombre</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION TRI -->
+        <section class="settings-section" data-section="sort">
+          <h3 class="settings-section-title">Tri par défaut</h3>
+          <p class="settings-section-desc">
+            Définit l’ordre utilisé automatiquement au chargement du flux.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">sort</span>
+              <div class="settings-text">
+                <label for="default-sort-select" class="settings-label">Tri par défaut</label>
+                <div class="settings-subtitle">Ordre appliqué au chargement du flux</div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <select id="default-sort-select" class="pill-select">
+                <option value="seeders">Seeders</option>
+                <option value="date">Date d'ajout</option>
+                <option value="name">Nom</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION FILTRE DATE -->
+        <section class="settings-section" data-section="date">
+          <h3 class="settings-section-title">Filtre par défaut</h3>
+          <p class="settings-section-desc">
+            Limite les résultats aux X derniers jours dès le chargement.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-icon">
+                <span class="material-symbols-rounded">schedule</span>
+              </div>
+              <div class="settings-text">
+                <div class="settings-label">Filtre par défaut</div>
+                <div class="settings-subtitle">
+                  Période appliquée automatiquement au chargement.
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-center">
+              <select id="default-date-filter-select" class="pill-select">
+                <option value="0">All</option>
+                <option value="1">24h</option>
+                <option value="2">48h</option>
+                <option value="3">3 jours</option>
+                <option value="7">7 jours</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" data-section="refresh">
+          <h3 class="settings-section-title">Rafraîchissement</h3>
+          <p class="settings-section-desc">
+            Détermine la fréquence de mise à jour automatique du flux.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">refresh</span>
+              <div class="settings-text">
+                <label for="refresh-interval-select" class="settings-label">
+                  Mode de rafraîchissement
+                </label>
+                <div class="settings-subtitle">
+                  Choisissez entre manuel ou un intervalle automatique.
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-center">
+              <select id="refresh-interval-select" class="pill-select">
+                <option value="manual">Manuel</option>
+                <option value="15">15 min</option>
+                <option value="30">30 min</option>
+                <option value="60">1 h</option>
+              </select>
+            </div>
+          </div>
+        </section>
+        <!-- 🔹 FIN SECTION RAFRAÎCHISSEMENT -->
+
+        <!-- SECTION AFFICHAGE -->
+        <section class="settings-section" data-section="display">
+          ...
+        </section>
+        <!-- SECTION AFFICHAGE -->
+        <section class="settings-section" data-section="display">
+          <h3 class="settings-section-title">Affichage</h3>
+          <p class="settings-section-desc">
+            Ajuste la taille des cartes pour afficher plus ou moins d’éléments.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">view_agenda</span>
+              <div class="settings-text">
+                <label for="card-size-select" class="settings-label">Affichage</label>
+                <div class="settings-subtitle">
+                  Ajuster la densité d'affichage des résultats
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <select id="card-size-select" class="pill-select">
+                <option value="compact">Compact</option>
+                <option value="normal" selected>Normal</option>
+                <option value="large">Large</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION LOGS -->
+        <section class="settings-section" data-section="logs">
+          <h3 class="settings-section-title">Logs</h3>
+          <p class="settings-section-desc">
+            Consulter l’historique détaillé des opérations de synchronisation.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">list_alt</span>
+              <div class="settings-text">
+                <span class="settings-label">Logs</span>
+                <div class="settings-subtitle">Consulter l'historique des opérations</div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <button id="open-logs" class="btn-logs">Afficher les logs</button>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -217,6 +343,7 @@
       <button id="close-settings" class="btn-close">Fermer</button>
     </div>
   </div>
+
 
   <!-- MODAL LOGS -->
   <div id="logs-overlay" class="settings-overlay hidden"></div>

@@ -80,6 +80,35 @@ document.addEventListener("DOMContentLoaded", () => {
   const DATE_FILTER_DEFAULT_STORAGE_KEY = "defaultDateFilterDays";
   const detailsOriginalTitleEl = document.getElementById("details-original-title");
   const detailsOriginalToggle = document.getElementById("details-original-toggle");
+  const settingsNavItems = document.querySelectorAll(".settings-nav-item");
+  const settingsSections = document.querySelectorAll(".settings-section");
+  const refreshIntervalSelect = document.getElementById("refresh-interval-select");
+  const REFRESH_INTERVAL_STORAGE_KEY = "refreshIntervalMode";
+
+  let activeSettingsSection = "theme";
+
+  function setActiveSettingsSection(sectionId) {
+    activeSettingsSection = sectionId || "theme";
+
+    settingsNavItems.forEach((btn) => {
+      const id = btn.getAttribute("data-section");
+      btn.classList.toggle("active", id === activeSettingsSection);
+    });
+
+    settingsSections.forEach((section) => {
+      const id = section.getAttribute("data-section");
+      section.classList.toggle("active", id === activeSettingsSection);
+    });
+  }
+
+  settingsNavItems.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-section");
+      if (!id) return;
+      setActiveSettingsSection(id);
+    });
+  });
+
 
   // ⭐ NOUVEAU : select pour la taille des cartes
   const cardSizeSelect = document.getElementById("card-size-select");
@@ -93,6 +122,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let controlsCollapsed = false;
   let controlsManuallyExpanded = false;
+  let refreshTimerId = null;
 
   let currentSearch = "";
   const feedState = {
@@ -1433,8 +1463,103 @@ document.addEventListener("DOMContentLoaded", () => {
     applyCardSize(size);
   });
 
+  // ---------------------------------------------------------------------------
+  // Rafraîchissement complet : API /api/sync + rechargement du feed
+  // ---------------------------------------------------------------------------
+
+  async function triggerFullRefresh({ silent = false } = {}) {
+    // On affiche un message basique si pas silent
+    if (!silent && loadingEl) {
+      loadingEl.classList.remove("hidden");
+      errorEl.classList.add("hidden");
+    }
+
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+      });
+
+      if (res.status === 409) {
+        // sync déjà en cours → on se contente de recharger la vue
+        console.warn("Sync déjà en cours, on recharge seulement le feed.");
+        await loadFeed();
+        return;
+      }
+
+      if (!res.ok) {
+        console.error("Erreur HTTP /api/sync:", res.status);
+        if (!silent && errorEl) {
+          errorEl.textContent = "Erreur lors de la synchronisation.";
+          errorEl.classList.remove("hidden");
+        }
+        // on recharge quand même le feed avec ce qu'il y a
+        await loadFeed();
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.ok && !silent && errorEl) {
+        errorEl.textContent =
+          data.error || "Erreur pendant la synchronisation.";
+        errorEl.classList.remove("hidden");
+      }
+
+      // Une fois la sync terminée, on recharge les données en BDD
+      await loadFeed();
+    } catch (err) {
+      console.error("triggerFullRefresh error:", err);
+      if (!silent && errorEl) {
+        errorEl.textContent =
+          "Erreur réseau lors de la synchronisation.";
+        errorEl.classList.remove("hidden");
+      }
+      await loadFeed();
+    } finally {
+      if (!silent && loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rafraîchissement auto basé sur les paramètres (15 / 30 / 60 min)
+  // ---------------------------------------------------------------------------
+
+  function clearRefreshTimer() {
+    if (refreshTimerId !== null) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+  }
+
+  function scheduleAutoRefresh(mode) {
+    clearRefreshTimer();
+
+    if (!mode || mode === "manual") {
+      return; // pas d'auto-refresh
+    }
+
+    const minutes = parseInt(mode, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return;
+    }
+
+    const delayMs = minutes * 60 * 1000;
+
+    refreshTimerId = setInterval(() => {
+      // On ne spamme pas l'utilisateur : silent=true → pas de message d'erreur visible
+      triggerFullRefresh({ silent: true });
+    }, delayMs);
+  }
+
+  refreshIntervalSelect?.addEventListener("change", (e) => {
+    const value = e.target.value || "manual";
+    localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, value);
+    scheduleAutoRefresh(value);
+  });
+
   refreshBtn?.addEventListener("click", () => {
-    loadFeed();
+    triggerFullRefresh({ silent: false });
   });
 
   settingsBtn?.addEventListener("click", openSettings);
@@ -1539,6 +1664,14 @@ document.addEventListener("DOMContentLoaded", () => {
       e.stopPropagation();
       applyDateFilterSelection(defaultDateFilterDays || 0);
     });
+    // 🔹 Init du mode de rafraîchissement depuis le localStorage
+    if (refreshIntervalSelect) {
+      const savedMode =
+        localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY) || "manual";
+      refreshIntervalSelect.value = savedMode;
+      scheduleAutoRefresh(savedMode);
+    }
+
     await loadFeed();
     await initVersionFooter();
   })();
