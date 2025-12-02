@@ -113,9 +113,12 @@
     </footer>
   </div>
 
+  <!-- SETTINGS -->
   <div id="settings-overlay" class="settings-overlay hidden"></div>
   <div id="settings-modal" class="settings-modal hidden">
     <h2>Paramètres</h2>
+
+    <!-- Thème -->
     <div class="settings-row">
       <div class="settings-row-main">
         <span class="settings-icon material-symbols-rounded">dark_mode</span>
@@ -133,6 +136,7 @@
       </div>
     </div>
 
+    <!-- Tri par défaut -->
     <div class="settings-row">
       <div class="settings-row-main">
         <span class="settings-icon material-symbols-rounded">sort</span>
@@ -149,7 +153,8 @@
         </select>
       </div>
     </div>
-    
+
+    <!-- Filtre date par défaut -->
     <div class="settings-row">
       <div class="settings-row-main">
         <div class="settings-icon">
@@ -165,7 +170,7 @@
 
       <div class="settings-center">
         <select id="default-date-filter-select" class="pill-select">
-          <option value="0">Tous</option>
+          <option value="0">All</option>
           <option value="1">24h</option>
           <option value="2">48h</option>
           <option value="3">3 jours</option>
@@ -174,6 +179,27 @@
       </div>
     </div>
 
+    <!-- Affichage (taille des cartes) -->
+    <div class="settings-row">
+      <div class="settings-row-main">
+        <span class="settings-icon material-symbols-rounded">view_agenda</span>
+        <div class="settings-text">
+          <label for="card-size-select" class="settings-label">Affichage</label>
+          <div class="settings-subtitle">
+            Ajuster la densité d'affichage des résultats
+          </div>
+        </div>
+      </div>
+      <div class="settings-center">
+        <select id="card-size-select" class="pill-select">
+          <option value="compact">Compact</option>
+          <option value="normal" selected>Normal</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Logs -->
     <div class="settings-row">
       <div class="settings-row-main">
         <span class="settings-icon material-symbols-rounded">list_alt</span>
@@ -192,6 +218,7 @@
     </div>
   </div>
 
+  <!-- MODAL LOGS -->
   <div id="logs-overlay" class="settings-overlay hidden"></div>
   <div id="logs-modal" class="settings-modal logs-modal hidden">
     <h2>Logs YGGFeed</h2>
@@ -205,6 +232,7 @@
     </div>
   </div>
 
+  <!-- MODAL DÉTAILS -->
   <div id="details-overlay" class="settings-overlay hidden"></div>
   <div id="details-modal" class="settings-modal details-modal hidden">
     <div class="details-layout">
@@ -216,12 +244,21 @@
       </div>
 
       <div class="details-content">
-        <h2 id="details-title" class="details-title"></h2>
+        <div class="details-title-row">
+          <h2 id="details-title" class="details-title"></h2>
+          <button
+            id="details-original-toggle"
+            class="details-original-toggle hidden"
+            type="button"
+            title="Afficher le titre original"
+          >
+            <span class="material-symbols-rounded">info</span>
+          </button>
+        </div>
 
         <div id="details-meta" class="details-meta"></div>
 
         <p id="details-plot" class="details-plot"></p>
-
         <div id="details-extra" class="details-extra"></div>
 
         <a

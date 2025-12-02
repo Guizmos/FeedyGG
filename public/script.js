@@ -1,4 +1,3 @@
-// --- Gestion du thème ---
 function applyTheme(mode) {
   document.body.classList.remove("theme-light");
 
@@ -79,6 +78,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const activeDateFilterChip = document.getElementById("active-date-filter-chip");
   const DATE_FILTER_STORAGE_KEY = "dateFilterDays";
   const DATE_FILTER_DEFAULT_STORAGE_KEY = "defaultDateFilterDays";
+  const detailsOriginalTitleEl = document.getElementById("details-original-title");
+  const detailsOriginalToggle = document.getElementById("details-original-toggle");
+
+  // ⭐ NOUVEAU : select pour la taille des cartes
+  const cardSizeSelect = document.getElementById("card-size-select");
+  const CARD_SIZE_STORAGE_KEY = "cardSize";
 
   let currentDateFilterDays = null;
   let defaultDateFilterDays = 0;
@@ -148,6 +153,26 @@ document.addEventListener("DOMContentLoaded", () => {
     defaultDateFilterDays = 0;
   }
 
+  // ⭐ NOUVEAU : fonction qui applique la taille des cartes sur le <body>
+  function applyCardSize(size) {
+    document.body.classList.remove("cards-size-compact", "cards-size-large");
+
+    if (size === "compact") {
+      document.body.classList.add("cards-size-compact");
+    } else if (size === "large") {
+      document.body.classList.add("cards-size-large");
+    }
+    // "normal" = aucun ajout de classe, on garde le style par défaut
+  }
+
+  // ⭐ NOUVEAU : init de la taille des cartes depuis localStorage
+  const savedCardSize = localStorage.getItem(CARD_SIZE_STORAGE_KEY) || "normal";
+  applyCardSize(savedCardSize);
+  if (cardSizeSelect) {
+    cardSizeSelect.value = savedCardSize;
+    autosizeSelect(cardSizeSelect);
+  }
+
   function getDateFilterDisplayLabel(days) {
     if (!days || days <= 0) return "Tous";
     return getDateFilterLabel(days) || "";
@@ -155,31 +180,31 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const responsiveCards = [];
 
-function updateCardButtonMode(card) {
-  if (!card) return;
+  function updateCardButtonMode(card) {
+    if (!card) return;
 
-  const rect = card.getBoundingClientRect();
-  const width = rect?.width || 0;
+    const rect = card.getBoundingClientRect();
+    const width = rect?.width || 0;
 
-  const viewportWidth =
-    window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth || 0;
 
-  if (viewportWidth <= 370) {
-    card.classList.remove("card--compact");
-    card.classList.add("card--vertical");
-    return;
+    if (viewportWidth <= 370) {
+      card.classList.remove("card--compact");
+      card.classList.add("card--vertical");
+      return;
+    }
+
+    const ICON_THRESHOLD = 380;
+
+    if (width < ICON_THRESHOLD) {
+      card.classList.add("card--compact");
+    } else {
+      card.classList.remove("card--compact");
+    }
+
+    card.classList.remove("card--vertical");
   }
-
-  const ICON_THRESHOLD = 380;
-
-  if (width < ICON_THRESHOLD) {
-    card.classList.add("card--compact");
-  } else {
-    card.classList.remove("card--compact");
-  }
-
-  card.classList.remove("card--vertical");
-}
 
   function setupCardResponsiveButtons(card) {
     if (!card) return;
@@ -230,7 +255,6 @@ function updateCardButtonMode(card) {
     errorEl.classList.add("hidden");
     emptyEl.classList.add("hidden");
 
-    // à chaque reload du feed, on reset la recherche (comportement actuel conservé)
     currentSearch = "";
     if (searchInput) {
       searchInput.value = "";
@@ -239,8 +263,6 @@ function updateCardButtonMode(card) {
     const category = categorySelect.value || "film";
     const sort = (sortSelect && sortSelect.value) || "seeders";
 
-    // On demande TOUJOURS tous les éléments au backend.
-    // La limite (3 / 9 / Tout) et le filtre date sont gérés côté front.
     const paramsObj = {
       category,
       limit: "all",
@@ -320,29 +342,29 @@ function updateCardButtonMode(card) {
     t = t.replace(/\s*\/\s*\d+\s*build.*$/i, "");
     t = t.replace(/\s*build\s*\d+.*$/i, "");
   
-    // 4) Traîne de version non parenthésée : " v1.2.381918 ..." ou " 0.1.26.2.47138.12 ..."
-    t = t.replace(/\bv\d+(?:[._]\d+)*\b.*$/i, "");      // v1.2.3.4...
-    t = t.replace(/\b\d+(?:[._]\d+){2,}\b.*$/i, "");    // 0.1.26.2.47138.12...
+    // 4) Traîne de version non parenthésée
+    t = t.replace(/\bv\d+(?:[._]\d+)*\b.*$/i, "");
+    t = t.replace(/\b\d+(?:[._]\d+){2,}\b.*$/i, "");
   
     // 5) "Update v97150", "Update 1.0.2.47088s" etc.
     t = t.replace(/\bUpdate\b.*$/i, "");
   
-    // 6) Tags de groupe en fin : "-ElAmigos", "- Mephisto", "-TENOKE", etc.
+    // 6) Tags de groupe en fin
     t = t.replace(
       /\s*-\s*(ElAmigos|Mephisto|TENOKE|RUNE|P2P|FitGirl Repack|voices\d+)\s*$/i,
       ""
     );
   
-    // 7) Blocs de plateforme/sources à la fin : "[WIN X64 MULTI PORTABLE]", "[GOG]"...
+    // 7) Blocs [X Y Z] à la fin
     t = t.replace(/\s*\[[^\]]*\]\s*$/g, "");
   
-    // 8) Remplacer . et _ par espace (Ready.or.Not → Ready or Not)
+    // 8) Remplacer . et _ par espaces
     t = t.replace(/[._]/g, " ");
   
     // 9) Nettoyage espaces
     t = t.replace(/\s+/g, " ").trim();
   
-    // 10) Espaces autour des ":" et " - "
+    // 10) Espaces autour de ":" et " - "
     t = t.replace(/\s+(:)/g, " $1");
     t = t.replace(/\s+-\s+/g, " - ");
   
@@ -352,31 +374,31 @@ function updateCardButtonMode(card) {
   function createCard(item) {
     const card = document.createElement("div");
     card.className = "card";
-  
+
     let catKey = item.category;
-  
+
     if (!catKey && categorySelect) {
       const currentCat = categorySelect.value;
       if (currentCat && currentCat !== "all") {
         catKey = currentCat;
       }
     }
-  
+
     if (catKey && catKey !== "all") {
       const catLabel =
         CATEGORY_LABELS[catKey] ||
         feedState.categoryLabel ||
         catKey;
-  
+
       const catBadge = document.createElement("div");
       catBadge.className = `card-category card-category--${catKey}`;
       catBadge.textContent = catLabel;
       card.appendChild(catBadge);
     }
-  
+
     const posterWrap = document.createElement("div");
     posterWrap.className = "card-poster-wrap";
-  
+
     const posterUrl = item.poster || item.posterUrl;
     if (posterUrl) {
       const img = document.createElement("img");
@@ -390,52 +412,42 @@ function updateCardButtonMode(card) {
       fallback.textContent = "Affiche";
       posterWrap.appendChild(fallback);
     }
-  
+
     const body = document.createElement("div");
     body.className = "card-body";
-  
+
     const titleRow = document.createElement("div");
     titleRow.className = "card-title-row";
-  
+
     const title = document.createElement("div");
     title.className = "card-title";
     title.textContent = getDisplayTitle(item);
-  
+
     const infoBtn = document.createElement("button");
     infoBtn.className = "info-btn";
     infoBtn.textContent = "i";
-    infoBtn.title = "Voir le titre original";
-  
-    const infoDetail = document.createElement("div");
-    infoDetail.className = "info-detail";
-    infoDetail.textContent = item.rawTitle || "";
-    infoDetail.hidden = true;
-  
-    infoBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      infoDetail.hidden = !infoDetail.hidden;
-    });
-  
+    infoBtn.title = "Afficher/masquer les infos";
+
     titleRow.append(title, infoBtn);
-    body.append(titleRow, infoDetail);
-  
+    body.append(titleRow);
+
     const sub = document.createElement("div");
     sub.className = "card-sub";
-  
+
     const added = item.addedAt || "—";
     sub.appendChild(createMetaLine("Date d'ajout :", added));
-  
+
     const hasEpisode = item.episode != null && item.episode !== "";
     const labelEpisodeOrYear = hasEpisode ? "Épisode :" : "Année :";
     const valueEpisodeOrYear = hasEpisode ? item.episode : (item.year || "—");
     sub.appendChild(createMetaLine(labelEpisodeOrYear, valueEpisodeOrYear));
-  
+
     sub.appendChild(createMetaLine("Taille :", item.size || "—"));
-  
+
     if (item.quality) {
       sub.appendChild(createMetaLine("Qualité :", item.quality));
     }
-  
+
     sub.appendChild(
       createMetaLine(
         "Seeders :",
@@ -443,9 +455,10 @@ function updateCardButtonMode(card) {
         "meta-line-seeders"
       )
     );
-  
+
     body.appendChild(sub);
-  
+
+    // --- Boutons d'action ---
     const actions = document.createElement("div");
     actions.className = "card-actions";
 
@@ -472,16 +485,17 @@ function updateCardButtonMode(card) {
     btnOpen.target = "_blank";
     btnOpen.rel = "noopener noreferrer";
 
+    actions.append(btnDl, btnDlIcon, btnOpen);
+
+    body.append(actions);
+    card.append(posterWrap, body);
+
     const showDetails =
       catKey === "film" || catKey === "series" || catKey === "spectacle";
 
     if (showDetails) {
-      const btnDetails = document.createElement("button");
-      btnDetails.type = "button";
-      btnDetails.className = "btn btn-details";
-      btnDetails.textContent = "Détails";
-
-      btnDetails.addEventListener("click", (e) => {
+      posterWrap.classList.add("card-poster-clickable");
+      posterWrap.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
         openDetails(
@@ -492,24 +506,20 @@ function updateCardButtonMode(card) {
           catKey
         );
       });
-
-      const spacer = document.createElement("div");
-      spacer.className = "card-actions-spacer";
-      spacer.style.width = "16px";
-      spacer.style.flex = "0 0 16px";
-
-      actions.append(btnDetails, spacer, btnDl, btnDlIcon, btnOpen);
-    } else {
-      actions.append(btnDl, btnDlIcon, btnOpen);
     }
 
-    body.append(actions);
-    card.append(posterWrap, body);
-    setupCardResponsiveButtons(card);
+    infoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isHidden = card.classList.toggle("card-meta-hidden");
+      infoBtn.title = isHidden
+        ? "Afficher les infos"
+        : "Masquer les infos";
+    });
 
+    setupCardResponsiveButtons(card);
     return card;
   }
-  
+
   function renderItems(items) {
     responsiveCards.length = 0;
     if (!items.length) {
@@ -600,30 +610,46 @@ function updateCardButtonMode(card) {
   function parseItemDate(raw) {
     if (!raw) return null;
 
+    // 1) Déjà un Date valide
     if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
       return raw;
     }
 
-    const dNative = new Date(raw);
-    if (!Number.isNaN(dNative.getTime())) {
-      return dNative;
+    // 2) Timestamp numérique (ms depuis epoch)
+    if (typeof raw === "number") {
+      const d = new Date(raw);
+      return Number.isNaN(d.getTime()) ? null : d;
     }
 
-    const m = String(raw).match(
+    const str = String(raw).trim();
+
+    // 3) Format ISO (2025-12-01T21:08:04Z, etc.)
+    if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+      const d = new Date(str);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    // 4) Ton format FR : dd/mm/yyyy [hh:mm[:ss]]
+    const m = str.match(
       /^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/
     );
+
     if (m) {
       const day = parseInt(m[1], 10);
-      const month = parseInt(m[2], 10) - 1;
+      const month = parseInt(m[2], 10) - 1; // 0-based
       const year = parseInt(m[3], 10);
       const h = m[4] ? parseInt(m[4], 10) : 0;
       const min = m[5] ? parseInt(m[5], 10) : 0;
       const s = m[6] ? parseInt(m[6], 10) : 0;
-      return new Date(year, month, day, h, min, s);
+
+      const d = new Date(year, month, day, h, min, s);
+      return Number.isNaN(d.getTime()) ? null : d;
     }
 
+    // 5) Rien de reconnu → on renvoie null, on NE fait PAS new Date(str)
     return null;
   }
+
 
   function ensureItemDate(item) {
     if (item._addedAtDate instanceof Date && !Number.isNaN(item._addedAtDate.getTime())) {
@@ -698,7 +724,6 @@ function updateCardButtonMode(card) {
       return;
     }
 
-    // 2) Valeur différente du défaut → bulle active avec badge (X)
     if (!currentLabel) {
       activeDateFilterChip.classList.add("hidden");
       activeDateFilterChip.innerHTML = "";
@@ -718,7 +743,6 @@ function updateCardButtonMode(card) {
       </div>
     `;
   }
-
 
   function getUiLimit() {
     if (!limitSelect) return Infinity;
@@ -754,7 +778,6 @@ function updateCardButtonMode(card) {
           .filter((g) => g.items && g.items.length);
       }
 
-      // Limite appliquée PAR GROUPE
       if (Number.isFinite(limitValue)) {
         groupsToRender = groupsToRender
           .map((g) => ({
@@ -810,7 +833,6 @@ function updateCardButtonMode(card) {
         </span>
       `;
     }
-
   }
 
   // --- UI du filtre date (panneau sous la barre) ---
@@ -903,7 +925,7 @@ function updateCardButtonMode(card) {
     dateFilterPanel.innerHTML = `
       <div class="date-filter-inner">
         <div class="date-filter-pills">
-          <button class="date-filter-pill" data-days="0">Tout</button>
+          <button class="date-filter-pill" data-days="0">All</button>
           <button class="date-filter-pill" data-days="1">24h</button>
           <button class="date-filter-pill" data-days="2">48h</button>
           <button class="date-filter-pill" data-days="3">3 jours</button>
@@ -928,7 +950,6 @@ function updateCardButtonMode(card) {
     }
 
     applyDateFilterSelection(initialDays, { skipReload: true });
-
 
     dateFilterPanel.addEventListener("click", (e) => {
       const pill = e.target.closest(".date-filter-pill");
@@ -1254,8 +1275,23 @@ function updateCardButtonMode(card) {
 
     const effectiveCat = catKey || item.category || categorySelect?.value || "film";
 
+    const displayTitle = getDisplayTitle(item);
+
     if (detailsTitleEl) {
-      detailsTitleEl.textContent = getDisplayTitle(item);
+      detailsTitleEl.textContent = displayTitle;
+    }
+
+    if (detailsOriginalToggle) {
+      const raw = (item.rawTitle || "").trim();
+
+      if (raw && raw !== displayTitle) {
+        detailsOriginalToggle.classList.remove("hidden");
+        detailsOriginalToggle.dataset.rawTitle = raw;
+        detailsOriginalToggle.dataset.cleanTitle = displayTitle;
+        detailsOriginalToggle.classList.remove("details-original-toggle-active");
+      } else {
+        detailsOriginalToggle.classList.add("hidden");
+      }
     }
 
     applyDetailsPoster(item.poster || item.posterUrl || null);
@@ -1278,7 +1314,17 @@ function updateCardButtonMode(card) {
 
   detailsCloseBtn?.addEventListener("click", closeDetails);
 
-  // --- Header compact au scroll ---
+  detailsOriginalToggle?.addEventListener("click", () => {
+    if (!detailsOriginalToggle) return;
+
+    const raw = detailsOriginalToggle.dataset.rawTitle;
+    const clean = detailsOriginalToggle.dataset.cleanTitle;
+
+    const isShowingRaw = detailsTitleEl.textContent === raw;
+    detailsTitleEl.textContent = isShowingRaw ? clean : raw;
+
+    detailsOriginalToggle.classList.toggle("details-original-toggle-active", !isShowingRaw);
+  });
 
   window.addEventListener("scroll", () => {
     if (!headerEl) return;
@@ -1377,6 +1423,16 @@ function updateCardButtonMode(card) {
     applyDateFilterSelection(value);
   });
 
+  // ⭐ NOUVEAU : event sur le select "Affichage" (Compact / Normal / Large)
+  cardSizeSelect?.addEventListener("change", (e) => {
+    const value = e.target.value || "normal";
+    const size =
+      value === "compact" || value === "large" ? value : "normal";
+
+    localStorage.setItem(CARD_SIZE_STORAGE_KEY, size);
+    applyCardSize(size);
+  });
+
   refreshBtn?.addEventListener("click", () => {
     loadFeed();
   });
@@ -1469,11 +1525,11 @@ function updateCardButtonMode(card) {
     controlsManuallyExpanded = true;
   });
 
-  // --- Init ---
   (async () => {
     await initCategories();
     autosizeSelect(limitSelect);
     autosizeSelect(sortSelect);
+    if (cardSizeSelect) autosizeSelect(cardSizeSelect);
     initDateFilterPanel();
     activeDateFilterChip?.addEventListener("click", (e) => {
       const btn = e.target.closest(".date-filter-chip-clear");
@@ -1481,7 +1537,6 @@ function updateCardButtonMode(card) {
 
       e.preventDefault();
       e.stopPropagation();
-      // Retour au filtre par défaut configuré
       applyDateFilterSelection(defaultDateFilterDays || 0);
     });
     await loadFeed();
