@@ -85,7 +85,6 @@
   color: #111827;
 }
 
-/* Forçage Affichage pour être strictement identique aux autres */
 .settings-modal #card-size-select.pill-select {
   width: 130px;
   min-width: 130px;
@@ -125,7 +124,6 @@ body {
   display: none !important;
 }
 
-/* --- STRUCTURE --- */
 .app {
   max-width: 1400px;
   margin: 0 auto;
@@ -160,8 +158,6 @@ body {
   color: var(--muted);
 }
 
-/* --- BOUTONS HEADER --- */
-
 .header-actions {
   display: flex;
   align-items: center;
@@ -190,12 +186,12 @@ body {
 }
 
 /* ====================================================================== */
-/* ICONES MATERIAL SYMBOLS (unifi�es)                                     */
+/* ICONES MATERIAL SYMBOLS                                                */
 /* ====================================================================== */
 
 .material-symbols-rounded {
   font-variation-settings:
-    'FILL' 0,
+    "FILL" 0,
     'wght' 400,
     'GRAD' 0,
     'opsz' 24;
@@ -209,12 +205,10 @@ body {
   line-height: 1;
 }
 
-/* ic�ne de loupe dans le champ de recherche un poil plus petite */
 .search-icon.icon-glyph {
   font-size: 18px;
 }
 
-/* --- HEADER BTNS (refresh + settings) --- */
 .header-btn {
   width: var(--filters-pill-height);
   height: var(--filters-pill-height);
@@ -247,7 +241,6 @@ body {
     0 8px 20px rgba(15, 23, 42, 0.6);
 }
 
-/* Th�me clair : m�me logique que .controls-search-btn */
 .theme-light .header-btn {
   background: rgba(255, 255, 255, 0.96);
   box-shadow:
@@ -264,7 +257,6 @@ body {
     0 8px 20px rgba(15, 23, 42, 0.18);
 }
 
-/* --- SEARCH HEADER --- */
 .controls-search-btn {
   width: var(--filters-pill-height);
   height: var(--filters-pill-height);
@@ -297,14 +289,6 @@ body {
     0 8px 20px rgba(15, 23, 42, 0.6);
 }
 
-.controls-search-btn:hover {
-  background: var(--accent);
-  color: #020817;
-  box-shadow:
-    0 0 0 1px rgba(56, 189, 248, 0.9),
-    0 8px 20px rgba(15, 23, 42, 0.6);
-}
-
 .theme-light .controls-search-btn {
   background: rgba(255, 255, 255, 0.96);
   box-shadow:
@@ -321,7 +305,6 @@ body {
     0 8px 20px rgba(15, 23, 42, 0.18);
 }
 
-/* container de recherche � l'int�rieur du pill .controls */
 .search-container {
   display: flex;
   align-items: center;
@@ -376,7 +359,6 @@ body {
   color: var(--accent);
 }
 
-/* petit rond pour les filtres compact�s */
 .filters-mini {
   width: var(--filters-pill-height);
   height: var(--filters-pill-height);
@@ -398,10 +380,9 @@ body {
 }
 
 .app-header.header-compact {
-  justify-content: space-between;   /* on garde le m�me alignement */
+  justify-content: space-between;
 }
 
-/* on cache visuellement mais on garde la place dans le flex */
 .app-header.header-compact .logo,
 .app-header.header-compact .header-actions {
   visibility: hidden;
@@ -420,8 +401,6 @@ body {
   }
 }
 
-
-/* --- FILTRES --- */
 .controls {
   display: flex;
   align-items: center;
@@ -488,7 +467,6 @@ body {
   cursor: pointer;
 }
 
-/* --- MAIN --- */
 .app-main {
   background: radial-gradient(circle at top right, var(--accent-soft), transparent),
               rgba(3, 7, 18, 0.96);
@@ -554,6 +532,43 @@ body {
 .theme-light .stats-bar {
   background: none;
 }
+
+.sort-direction-btn {
+  flex: 0 0 var(--filters-pill-height);
+  margin-left: 4px;
+}
+
+.sort-rotate-icon {
+  display: inline-flex;
+  transform: rotate(90deg);
+  transition: transform 0.18s ease;
+  margin-right: 1.5px;
+}
+
+.sort-direction-btn[disabled],
+.sort-direction-btn.sort-direction-disabled {
+  opacity: 0.35;
+  cursor: default;
+  box-shadow: none;
+  background: rgba(15, 23, 42, 0.7);
+  color: var(--muted);
+}
+
+.sort-direction-btn[disabled]:hover,
+.sort-direction-btn.sort-direction-disabled:hover {
+  background: rgba(15, 23, 42, 0.7);
+  color: var(--muted);
+  box-shadow: none;
+  transform: none;
+}
+
+.theme-light .sort-direction-btn[disabled],
+.theme-light .sort-direction-btn.sort-direction-disabled {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.35);
+}
+
 
 .date-filter-btn {
   margin-left: auto;
@@ -670,7 +685,6 @@ body {
   text-align: right;
 }
 
-/* Bouton filtre — état actif */
 .date-filter-btn.active {
   background: var(--accent);
   color: #020817;
@@ -1064,7 +1078,6 @@ body {
 /* MODES DE TAILLE DES CARTES                                             */
 /* ====================================================================== */
 
-/* --- COMPACT (OPTIMISÉ) --- */
 body.cards-size-compact .cards-grid {
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 10px;
@@ -1137,7 +1150,6 @@ body.cards-size-compact .card-category {
   left: 6px;
 }
 
-/* --- LARGE --- */
 body.cards-size-large .cards-grid {
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 22px;
@@ -1316,7 +1328,7 @@ body.cards-size-large .btn {
   gap: 16px;
   font-size: 0.9rem;
   padding: 6px 6px;
-  border-bottom: 1px solid rgba(148, 163, 253, 0.16);
+  border-bottom: none;
   border-radius: 12px;
   transition: background-color 0.18s ease, transform 0.12s ease,
               border-color 0.18s ease;
@@ -1338,8 +1350,6 @@ body.cards-size-large .btn {
   flex: 1;
 }
 
-/* --- Layout type paramètres Windows --- */
-
 .settings-layout {
   display: flex;
   align-items: stretch;
@@ -1347,7 +1357,6 @@ body.cards-size-large .btn {
   min-height: 260px;
 }
 
-/* Sidebar gauche */
 .settings-sidebar {
   flex: 0 0 230px;
   display: flex;
@@ -1467,6 +1476,17 @@ body.cards-size-large .btn {
 .theme-light .settings-nav-icon {
   background: rgba(255, 255, 255, 0.9);
   color: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(148, 163, 184, 0.35),
+    0 4px 10px rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .settings-row .settings-icon {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(148, 163, 184, 0.35),
+    0 4px 10px rgba(15, 23, 42, 0.08);
 }
 
 .theme-light .settings-nav-item:hover {
@@ -1484,38 +1504,52 @@ body.cards-size-large .btn {
   color: #ffffff;
 }
 
-@media (max-width: 768px) {
-  .settings-modal {
-    width: calc(100% - 16px);
-    padding: 16px 14px 14px;
-  }
+.card-fav-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 
-  .settings-layout {
-    flex-direction: column;
-    gap: 10px;
-  }
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.45);
 
-  .settings-sidebar {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
-    border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 253, 0.18);
-    padding: 2px 0 6px;
-  }
+  cursor: pointer;
+}
 
-  .theme-light .settings-sidebar {
-    border-bottom-color: rgba(148, 163, 184, 0.35);
-  }
+.card-fav-btn .material-symbols-rounded {
+  font-size: 18px;
+  line-height: 1;
+  color: rgba(148, 163, 184, 0.95);
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
 
-  .settings-nav-item {
-    flex: 1 1 48%;
-    padding: 6px 8px;
-  }
+.card-fav-btn--active {
+  background: rgba(15, 23, 42, 0.94);
+}
 
-  .settings-section .settings-row {
-    padding-inline: 0;
-  }
+.card-fav-btn--active .material-symbols-rounded {
+  color: var(--accent) !important;
+  font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24 !important;
+}
+
+.theme-light .card-fav-btn {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 10px 26px rgba(148, 163, 184, 0.35);
+}
+
+.theme-light .card-fav-btn .material-symbols-rounded {
+  color: #9ca3af;
+}
+
+.theme-light .card-fav-btn--active .material-symbols-rounded {
+  color: var(--accent);
 }
 
 .settings-icon {
@@ -1559,7 +1593,7 @@ body.cards-size-large .btn {
 .settings-modal .pill-select,
 .settings-modal .btn-logs {
   width: 130px;
-  min-width: 0px;
+  min-width: 130px;
   min-height: 34px;
   border-radius: 999px;
   text-align: center;
@@ -1742,7 +1776,7 @@ body.cards-size-large .btn {
 }
 
 .details-meta-line::before {
-  content: "� ";
+  content: "• ";
   opacity: 0.6;
 }
 
@@ -2019,6 +2053,39 @@ body.no-scroll {
 /* ====================================================================== */
 /* RESPONSIVE                                                             */
 /* ====================================================================== */
+@media (max-width: 768px) {
+  .settings-modal {
+    width: calc(100% - 16px);
+    padding: 16px 14px 14px;
+  }
+
+  .settings-layout {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .settings-sidebar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 253, 0.18);
+    padding: 2px 0 6px;
+  }
+
+  .theme-light .settings-sidebar {
+    border-bottom-color: rgba(148, 163, 184, 0.35);
+  }
+
+  .settings-nav-item {
+    flex: 1 1 48%;
+    padding: 6px 8px;
+  }
+
+  .settings-section .settings-row {
+    padding-inline: 0;
+  }
+}
 
 @media (max-width: 380px) {
 
@@ -2053,8 +2120,6 @@ body.no-scroll {
     text-align: left;
   }
 
-  /* --- BOUTONS --- */
-
   .card-actions {
     display: flex;
     flex-direction: row;
@@ -2064,7 +2129,7 @@ body.no-scroll {
     margin: 8px auto 0;
     align-items: stretch;
     gap: 6px;
-    justify-content: space-between;   /* important pour bien répartir */
+    justify-content: space-between;
   }
 
   .card-actions .btn {
@@ -2083,16 +2148,13 @@ body.no-scroll {
   }
 
     .card-actions > div {
-    /* c’est ton spacer */
     display: none !important;
   }
 
-  /* on enlève le spacer éventuel */
   .card-actions-spacer {
     display: none !important;
   }
 
-  /* on force le bouton texte et on masque l’icône */
   .card .btn-download-icon {
     display: none !important;
   }
@@ -2230,21 +2292,6 @@ body.no-scroll {
   #category-select.pill-select { width: auto; }
   #limit-select.pill-select    { width: auto; }
   #sort-select.pill-select     { width: auto; }
-
-  .controls.controls-collapsed {
-    width: auto;
-    max-width: none;
-    min-width: 0;
-    margin-left: auto;
-    padding: 2px;
-    border-radius: 999px;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    justify-content: flex-end;
-    overflow: hidden;
-  }
 
   .controls.controls-collapsed {
     width: 100%;

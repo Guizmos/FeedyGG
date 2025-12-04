@@ -89,6 +89,13 @@
         <button id="date-filter-btn" class="header-btn date-filter-btn">
           <span class="material-symbols-rounded">filter_alt</span>
         </button>
+        <button
+          id="sort-direction-btn"
+          class="header-btn sort-direction-btn"
+          type="button"
+          title="Inverser l'ordre du tri">
+          <span class="material-symbols-rounded sort-rotate-icon">sync_alt</span>
+        </button>
       </div>
 
       <div id="loading" class="loading hidden">
@@ -113,27 +120,17 @@
     </footer>
   </div>
 
-  <!-- SETTINGS -->
   <div id="settings-overlay" class="settings-overlay hidden"></div>
   <div id="settings-modal" class="settings-modal hidden">
     <h2>Paramètres</h2>
 
     <div class="settings-layout">
-      <!-- Sidebar à la Windows -->
       <nav class="settings-sidebar">
         <button class="settings-nav-item active" data-section="theme">
           <span class="settings-nav-icon material-symbols-rounded">dark_mode</span>
           <div class="settings-nav-text">
             <span class="settings-nav-label">Apparence</span>
             <span class="settings-nav-sub">Thème de l’interface</span>
-          </div>
-        </button>
-
-        <button class="settings-nav-item" data-section="display">
-          <span class="settings-nav-icon material-symbols-rounded">view_agenda</span>
-          <div class="settings-nav-text">
-            <span class="settings-nav-label">Affichage</span>
-            <span class="settings-nav-sub">Densité des cartes</span>
           </div>
         </button>
 
@@ -168,11 +165,17 @@
             <span class="settings-nav-sub">Historique des opérations</span>
           </div>
         </button>
+
+        <button class="settings-nav-item" data-section="purge">
+          <span class="settings-nav-icon material-symbols-rounded">delete_forever</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Base de données</span>
+            <span class="settings-nav-sub">Durée de conservation des données</span>
+          </div>
+        </button>
       </nav>
 
-      <!-- Contenu de droite, qui change selon la section -->
       <div class="settings-content">
-        <!-- SECTION THEME -->
         <section class="settings-section active" data-section="theme">
           <h3 class="settings-section-title">Thème</h3>
           <p class="settings-section-desc">
@@ -195,9 +198,27 @@
               </select>
             </div>
           </div>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">view_agenda</span>
+              <div class="settings-text">
+                <label for="card-size-select" class="settings-label">Affichage</label>
+                <div class="settings-subtitle">
+                  Ajuster la densité d'affichage des résultats
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <select id="card-size-select" class="pill-select">
+                <option value="compact">Compact</option>
+                <option value="normal" selected>Normal</option>
+                <option value="large">Large</option>
+              </select>
+            </div>
+          </div>
         </section>
 
-        <!-- SECTION TRI -->
         <section class="settings-section" data-section="sort">
           <h3 class="settings-section-title">Tri par défaut</h3>
           <p class="settings-section-desc">
@@ -222,7 +243,6 @@
           </div>
         </section>
 
-        <!-- SECTION FILTRE DATE -->
         <section class="settings-section" data-section="date">
           <h3 class="settings-section-title">Filtre par défaut</h3>
           <p class="settings-section-desc">
@@ -244,7 +264,7 @@
 
             <div class="settings-center">
               <select id="default-date-filter-select" class="pill-select">
-                <option value="0">All</option>
+                <option value="0">Tout</option>
                 <option value="1">24h</option>
                 <option value="2">48h</option>
                 <option value="3">3 jours</option>
@@ -283,37 +303,7 @@
             </div>
           </div>
         </section>
-        <!-- 🔹 FIN SECTION RAFRAÎCHISSEMENT -->
 
-        </section>
-        <!-- SECTION AFFICHAGE -->
-        <section class="settings-section" data-section="display">
-          <h3 class="settings-section-title">Affichage</h3>
-          <p class="settings-section-desc">
-            Ajuste la taille des cartes pour afficher plus ou moins d’éléments.
-          </p>
-
-          <div class="settings-row">
-            <div class="settings-row-main">
-              <span class="settings-icon material-symbols-rounded">view_agenda</span>
-              <div class="settings-text">
-                <label for="card-size-select" class="settings-label">Affichage</label>
-                <div class="settings-subtitle">
-                  Ajuster la densité d'affichage des résultats
-                </div>
-              </div>
-            </div>
-            <div class="settings-center">
-              <select id="card-size-select" class="pill-select">
-                <option value="compact">Compact</option>
-                <option value="normal" selected>Normal</option>
-                <option value="large">Large</option>
-              </select>
-            </div>
-          </div>
-        </section>
-
-        <!-- SECTION LOGS -->
         <section class="settings-section" data-section="logs">
           <h3 class="settings-section-title">Logs</h3>
           <p class="settings-section-desc">
@@ -333,6 +323,41 @@
             </div>
           </div>
         </section>
+
+        <section class="settings-section" data-section="purge">
+          <h3 class="settings-section-title">Purge &amp; rétention</h3>
+          <p class="settings-section-desc">
+            Choisissez combien de jours les éléments sont conservés en base avant d’être automatiquement supprimés.
+          </p>
+
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">delete_forever</span>
+              <div class="settings-text">
+                <label for="retention-days-select" class="settings-label">
+                  Durée de rétention
+                </label>
+                <div class="settings-subtitle">
+                  Les éléments plus anciens seront définitivement supprimés.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <select id="retention-days-select" class="pill-select">
+                <option value="2">2 jours</option>
+                <option value="3">3 jours</option>
+                <option value="7">7 jours</option>
+                <option value="14">14 jours</option>
+                <option value="30">30 jours</option>
+              </select>
+            </div>
+          </div>
+
+          <p class="settings-warning" style="color:#ef4444; margin-top: 12px; font-size: 13px">
+            ⚠️ Réduire la durée de rétention peut supprimer immédiatement des éléments plus anciens.
+          </p>
+        </section>
+
       </div>
     </div>
 
@@ -341,8 +366,6 @@
     </div>
   </div>
 
-
-  <!-- MODAL LOGS -->
   <div id="logs-overlay" class="settings-overlay hidden"></div>
   <div id="logs-modal" class="settings-modal logs-modal hidden">
     <h2>Logs YGGFeed</h2>
@@ -356,7 +379,6 @@
     </div>
   </div>
 
-  <!-- MODAL DÉTAILS -->
   <div id="details-overlay" class="settings-overlay hidden"></div>
   <div id="details-modal" class="settings-modal details-modal hidden">
     <div class="details-layout">

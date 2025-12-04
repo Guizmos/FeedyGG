@@ -1,3 +1,41 @@
+// Gestion des favoris côté front
+let favoritesSet = new Set();
+
+async function loadFavoritesFromApi() {
+  try {
+    const res = await fetch("/api/favorites");
+    const data = await res.json();
+    favoritesSet = new Set(data.favorites || []);
+  } catch (err) {
+    console.error("Erreur loadFavoritesFromApi:", err);
+  }
+}
+
+async function addFavorite(guid) {
+  const encoded = encodeURIComponent(guid);
+  try {
+    await fetch(`/api/favorites/${encoded}`, { method: "POST" });
+    favoritesSet.add(guid); // on garde le guid "plein" dans le Set
+  } catch (err) {
+    console.error("Erreur addFavorite:", err);
+  }
+}
+
+async function removeFavorite(guid) {
+  const encoded = encodeURIComponent(guid);
+  try {
+    await fetch(`/api/favorites/${encoded}`, { method: "DELETE" });
+    favoritesSet.delete(guid);
+  } catch (err) {
+    console.error("Erreur removeFavorite:", err);
+  }
+}
+
+function isFavorite(guid) {
+  return favoritesSet.has(guid);
+}
+
+// Thème global
 function applyTheme(mode) {
   document.body.classList.remove("theme-light");
 
@@ -13,6 +51,7 @@ function applyTheme(mode) {
   }
 }
 
+// Ajustement auto de la largeur des <select>
 function autosizeSelect(select) {
   if (!select) return;
 
@@ -33,10 +72,13 @@ function autosizeSelect(select) {
   select.style.width = width + "px";
 }
 
+// ============================================================================
+// MAIN UI LOGIC
+// ============================================================================
+
 document.addEventListener("DOMContentLoaded", () => {
   const categorySelect = document.getElementById("category-select");
   const limitSelect = document.getElementById("limit-select");
-  const sortSelect = document.getElementById("sort-select");
   const refreshBtn = document.getElementById("refresh-btn");
   const settingsBtn = document.getElementById("settings-btn");
   const closeSettingsBtn = document.getElementById("close-settings");
@@ -84,47 +126,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsSections = document.querySelectorAll(".settings-section");
   const refreshIntervalSelect = document.getElementById("refresh-interval-select");
   const REFRESH_INTERVAL_STORAGE_KEY = "refreshIntervalMode";
-
-  let activeSettingsSection = "theme";
-
-  function setActiveSettingsSection(sectionId) {
-    activeSettingsSection = sectionId || "theme";
-
-    settingsNavItems.forEach((btn) => {
-      const id = btn.getAttribute("data-section");
-      btn.classList.toggle("active", id === activeSettingsSection);
-    });
-
-    settingsSections.forEach((section) => {
-      const id = section.getAttribute("data-section");
-      section.classList.toggle("active", id === activeSettingsSection);
-    });
-  }
-
-  settingsNavItems.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-section");
-      if (!id) return;
-      setActiveSettingsSection(id);
-    });
-  });
-
-
-  // ⭐ NOUVEAU : select pour la taille des cartes
+  const sortSelect = document.getElementById("sort-select");
+  const sortDirectionBtn = document.getElementById("sort-direction-btn");
+  const sortDirectionIcon = sortDirectionBtn?.querySelector(".sort-rotate-icon");
+  const retentionDaysSelect = document.getElementById("retention-days-select");
   const cardSizeSelect = document.getElementById("card-size-select");
   const CARD_SIZE_STORAGE_KEY = "cardSize";
-
-  let currentDateFilterDays = null;
-  let defaultDateFilterDays = 0;
-
   const footerEl = document.getElementById("app-footer");
   const appVersionEl = document.getElementById("app-version");
 
+  let activeSettingsSection = "theme";
+  let currentDateFilterDays = null;
+  let defaultDateFilterDays = 0;
+  let currentRetentionDays = null;
   let controlsCollapsed = false;
   let controlsManuallyExpanded = false;
   let refreshTimerId = null;
-
+  let sortDirection = "desc";
   let currentSearch = "";
+
   const feedState = {
     mode: "single",
     categoryLabel: "",
@@ -134,6 +154,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const FALLBACK_CATS = [
     { key: "all",        label: "Tout" },
+    { key: "favorites",  label: "Favoris" },
     { key: "film",       label: "Films" },
     { key: "series",     label: "Séries TV" },
     { key: "emissions",  label: "Émissions TV" },
@@ -141,7 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
     { key: "animation",  label: "Animation" },
     { key: "games",      label: "Jeux vidéo" },
   ];
-  
+
   const CATEGORY_LABELS = {
     film: "Film",
     series: "Série TV",
@@ -150,19 +171,25 @@ document.addEventListener("DOMContentLoaded", () => {
     animation: "Animation",
     games: "Jeu vidéo",
   };
-  
+
+  const responsiveCards = [];
+
+  // ---------------------------------------------------------------------------
+  // Init thème / prefs
+  // ---------------------------------------------------------------------------
+
   const savedTheme = localStorage.getItem("theme") || "system";
   applyTheme(savedTheme);
   if (themeSelect) {
     themeSelect.value = savedTheme;
   }
-  
+
   themeSelect?.addEventListener("change", (e) => {
     const mode = e.target.value;
     localStorage.setItem("theme", mode);
     applyTheme(mode);
   });
-  
+
   const savedDefaultSort = localStorage.getItem("defaultSort") || "seeders";
   if (defaultSortSelect) {
     defaultSortSelect.value = savedDefaultSort;
@@ -183,7 +210,13 @@ document.addEventListener("DOMContentLoaded", () => {
     defaultDateFilterDays = 0;
   }
 
-  // ⭐ NOUVEAU : fonction qui applique la taille des cartes sur le <body>
+  function updateSortDirectionButtonState() {
+    if (!sortDirectionBtn || !categorySelect) return;
+    const isAll = categorySelect.value === "all";
+    sortDirectionBtn.disabled = isAll;
+    sortDirectionBtn.classList.toggle("sort-direction-disabled", isAll);
+  }
+
   function applyCardSize(size) {
     document.body.classList.remove("cards-size-compact", "cards-size-large");
 
@@ -192,10 +225,8 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (size === "large") {
       document.body.classList.add("cards-size-large");
     }
-    // "normal" = aucun ajout de classe, on garde le style par défaut
   }
 
-  // ⭐ NOUVEAU : init de la taille des cartes depuis localStorage
   const savedCardSize = localStorage.getItem(CARD_SIZE_STORAGE_KEY) || "normal";
   applyCardSize(savedCardSize);
   if (cardSizeSelect) {
@@ -203,12 +234,24 @@ document.addEventListener("DOMContentLoaded", () => {
     autosizeSelect(cardSizeSelect);
   }
 
+  function getDateFilterLabel(days) {
+    switch (days) {
+      case 1: return "24h";
+      case 2: return "48h";
+      case 3: return "3 jours";
+      case 7: return "7 jours";
+      default: return "";
+    }
+  }
+
   function getDateFilterDisplayLabel(days) {
     if (!days || days <= 0) return "Tous";
     return getDateFilterLabel(days) || "";
   }
 
-  const responsiveCards = [];
+  // ---------------------------------------------------------------------------
+  // Cartes / affichage
+  // ---------------------------------------------------------------------------
 
   function updateCardButtonMode(card) {
     if (!card) return;
@@ -276,6 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     autosizeSelect(categorySelect);
+    updateSortDirectionButtonState();
   }
 
   async function loadFeed() {
@@ -340,16 +384,16 @@ document.addEventListener("DOMContentLoaded", () => {
   function createMetaLine(label, value, extraClass = "") {
     const div = document.createElement("div");
     div.className = "meta-line" + (extraClass ? " " + extraClass : "");
-  
+
     const spanLabel = document.createElement("span");
     spanLabel.className = "meta-label";
     spanLabel.textContent = label;
-  
+
     const spanValue = document.createElement("span");
     spanValue.className = "meta-value";
     spanValue.textContent =
       value != null && value !== "" ? String(value) : "—";
-  
+
     div.append(spanLabel, spanValue);
     return div;
   }
@@ -357,50 +401,31 @@ document.addEventListener("DOMContentLoaded", () => {
   function getDisplayTitle(item) {
     const source = item.title || item.rawTitle || "";
     if (!source) return "Sans titre";
-  
+
     let t = source;
-  
-    // 1) Seeders/Leechers "(S:xx/L:xx)"
     t = t.replace(/\(S:\d+\/L:\d+\)/gi, "");
-  
-    // 2) Blocs de version/numéros entre parenthèses : (v1.2.3), (1.2.3), (86364)...
     t = t.replace(/\(\s*v?\s*\d[\d._]*\s*\)/gi, "");
     t = t.replace(/\(\s*\d+\s*\)/g, "");
-  
-    // 3) Parties " / build 20785690 ..." ou "build 20785690 ..."
     t = t.replace(/\s*\/\s*build\s*\d+.*$/i, "");
     t = t.replace(/\s*\/\s*\d+\s*build.*$/i, "");
     t = t.replace(/\s*build\s*\d+.*$/i, "");
-  
-    // 4) Traîne de version non parenthésée
     t = t.replace(/\bv\d+(?:[._]\d+)*\b.*$/i, "");
     t = t.replace(/\b\d+(?:[._]\d+){2,}\b.*$/i, "");
-  
-    // 5) "Update v97150", "Update 1.0.2.47088s" etc.
     t = t.replace(/\bUpdate\b.*$/i, "");
-  
-    // 6) Tags de groupe en fin
     t = t.replace(
       /\s*-\s*(ElAmigos|Mephisto|TENOKE|RUNE|P2P|FitGirl Repack|voices\d+)\s*$/i,
       ""
     );
-  
-    // 7) Blocs [X Y Z] à la fin
+
     t = t.replace(/\s*\[[^\]]*\]\s*$/g, "");
-  
-    // 8) Remplacer . et _ par espaces
     t = t.replace(/[._]/g, " ");
-  
-    // 9) Nettoyage espaces
     t = t.replace(/\s+/g, " ").trim();
-  
-    // 10) Espaces autour de ":" et " - "
     t = t.replace(/\s+(:)/g, " $1");
     t = t.replace(/\s+-\s+/g, " - ");
-  
+
     return t || source;
   }
-  
+
   function createCard(item) {
     const card = document.createElement("div");
     card.className = "card";
@@ -453,12 +478,43 @@ document.addEventListener("DOMContentLoaded", () => {
     title.className = "card-title";
     title.textContent = getDisplayTitle(item);
 
-    const infoBtn = document.createElement("button");
-    infoBtn.className = "info-btn";
-    infoBtn.textContent = "i";
-    infoBtn.title = "Afficher/masquer les infos";
+    titleRow.appendChild(title);
 
-    titleRow.append(title, infoBtn);
+    const guid = item.guid;
+
+    if (guid) {
+      const favBtn = document.createElement("button");
+      favBtn.type = "button";
+      favBtn.className = "info-btn card-fav-btn";
+
+      const favIcon = document.createElement("span");
+      favIcon.className = "material-symbols-rounded";
+
+      const initiallyFav = item.isFavorite || isFavorite(guid);
+      favIcon.textContent = initiallyFav ? "star" : "star_border";
+      if (initiallyFav) {
+        favBtn.classList.add("card-fav-btn--active");
+      }
+
+      favBtn.appendChild(favIcon);
+
+      favBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+
+        if (isFavorite(guid)) {
+          await removeFavorite(guid);
+          favBtn.classList.remove("card-fav-btn--active");
+          favIcon.textContent = "star_border";
+        } else {
+          await addFavorite(guid);
+          favBtn.classList.add("card-fav-btn--active");
+          favIcon.textContent = "star";
+        }
+      });
+
+      titleRow.appendChild(favBtn);
+    }
+
     body.append(titleRow);
 
     const sub = document.createElement("div");
@@ -488,7 +544,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     body.appendChild(sub);
 
-    // --- Boutons d'action ---
     const actions = document.createElement("div");
     actions.className = "card-actions";
 
@@ -538,14 +593,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    infoBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const isHidden = card.classList.toggle("card-meta-hidden");
-      infoBtn.title = isHidden
-        ? "Afficher les infos"
-        : "Masquer les infos";
-    });
-
     setupCardResponsiveButtons(card);
     return card;
   }
@@ -558,68 +605,70 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     emptyEl.classList.add("hidden");
-  
+
     resultsEl.innerHTML = "";
-  
+
     const grid = document.createElement("div");
     grid.className = "cards-grid";
-  
+
     items.forEach((item) => {
       grid.appendChild(createCard(item));
     });
-  
+
     resultsEl.appendChild(grid);
   }
-  
+
   function renderGroups(groups) {
     responsiveCards.length = 0;
     if (!Array.isArray(groups) || !groups.length) {
       renderItems([]);
       return;
     }
-  
+
     emptyEl.classList.add("hidden");
     resultsEl.innerHTML = "";
-  
+
     let total = 0;
-  
+
     groups.forEach((group) => {
       const items = group.items || [];
       if (!items.length) return;
-  
+
       total += items.length;
-  
+
       const section = document.createElement("section");
       section.className = "category-group";
-  
+
       const header = document.createElement("div");
       header.className = "group-header";
       header.textContent = group.label || group.key || "Catégorie";
-  
+
       const grid = document.createElement("div");
       grid.className = "cards-grid";
-  
+
       items.forEach((item) => {
         grid.appendChild(createCard(item));
       });
-  
+
       section.append(header, grid);
       resultsEl.appendChild(section);
     });
-  
+
     if (!total) {
       renderItems([]);
     }
   }
 
-  // --- Recherche / filtrage local ---
+  // ---------------------------------------------------------------------------
+  // Recherche locale
+  // ---------------------------------------------------------------------------
 
   function matchesSearch(item, q) {
     if (!q) return true;
     const qv = q.toLowerCase();
-  
+
     const displayTitle = getDisplayTitle(item);
-  
+
     const fields = [
       displayTitle,
       item.rawTitle,
@@ -628,24 +677,24 @@ document.addEventListener("DOMContentLoaded", () => {
       item.size,
       item.quality,
     ];
-  
+
     return fields.some((val) => {
       if (val == null) return false;
       return String(val).toLowerCase().includes(qv);
     });
   }
 
-  // --- Helpers dates pour filtre "X derniers jours" ---
+  // ---------------------------------------------------------------------------
+  // Gestion dates pour filtre
+  // ---------------------------------------------------------------------------
 
   function parseItemDate(raw) {
     if (!raw) return null;
 
-    // 1) Déjà un Date valide
     if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
       return raw;
     }
 
-    // 2) Timestamp numérique (ms depuis epoch)
     if (typeof raw === "number") {
       const d = new Date(raw);
       return Number.isNaN(d.getTime()) ? null : d;
@@ -653,20 +702,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const str = String(raw).trim();
 
-    // 3) Format ISO (2025-12-01T21:08:04Z, etc.)
     if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
       const d = new Date(str);
       return Number.isNaN(d.getTime()) ? null : d;
     }
 
-    // 4) Ton format FR : dd/mm/yyyy [hh:mm[:ss]]
     const m = str.match(
       /^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/
     );
 
     if (m) {
       const day = parseInt(m[1], 10);
-      const month = parseInt(m[2], 10) - 1; // 0-based
+      const month = parseInt(m[2], 10) - 1;
       const year = parseInt(m[3], 10);
       const h = m[4] ? parseInt(m[4], 10) : 0;
       const min = m[5] ? parseInt(m[5], 10) : 0;
@@ -676,10 +723,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return Number.isNaN(d.getTime()) ? null : d;
     }
 
-    // 5) Rien de reconnu → on renvoie null, on NE fait PAS new Date(str)
     return null;
   }
-
 
   function ensureItemDate(item) {
     if (item._addedAtDate instanceof Date && !Number.isNaN(item._addedAtDate.getTime())) {
@@ -710,16 +755,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const maxMs = currentDateFilterDays * 24 * 60 * 60 * 1000;
     return diffMs <= maxMs;
-  }
-
-  function getDateFilterLabel(days) {
-    switch (days) {
-      case 1: return "24h";
-      case 2: return "48h";
-      case 3: return "3 jours";
-      case 7: return "7 jours";
-      default: return "";
-    }
   }
 
   function updateDateFilterChip() {
@@ -782,6 +817,43 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const n = parseInt(raw, 10);
     return Number.isFinite(n) && n > 0 ? n : Infinity;
+  }
+
+  function sortItemsForCurrentSort(items) {
+    const sortKey = (sortSelect && sortSelect.value) || "seeders";
+    const dir = sortDirection === "asc" ? 1 : -1;
+    const arr = [...items];
+
+    arr.sort((a, b) => {
+      if (sortKey === "name") {
+        const va = getDisplayTitle(a).toLowerCase();
+        const vb = getDisplayTitle(b).toLowerCase();
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        return 0;
+      }
+
+      if (sortKey === "date") {
+        const da = ensureItemDate(a);
+        const db = ensureItemDate(b);
+        const ta = da ? da.getTime() : 0;
+        const tb = db ? db.getTime() : 0;
+        return (ta - tb) * dir;
+      }
+
+      const sa =
+        typeof a.seeders === "number"
+          ? a.seeders
+          : parseInt(a.seeders, 10) || 0;
+      const sb =
+        typeof b.seeders === "number"
+          ? b.seeders
+          : parseInt(b.seeders, 10) || 0;
+
+      return (sa - sb) * dir;
+    });
+
+    return arr;
   }
 
   function renderFromState() {
@@ -849,6 +921,8 @@ document.addEventListener("DOMContentLoaded", () => {
         itemsToRender = itemsToRender.slice(0, limitValue);
       }
 
+      itemsToRender = sortItemsForCurrentSort(itemsToRender);
+
       renderItems(itemsToRender);
       const total = itemsToRender.length;
 
@@ -865,21 +939,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // --- UI du filtre date (panneau sous la barre) ---
+  // ---------------------------------------------------------------------------
+  // UI filtre par date
+  // ---------------------------------------------------------------------------
 
   function updateDateFilterInfo() {
     const infoEl = dateFilterPanel?.querySelector(".date-filter-info");
     if (!infoEl) return;
 
-    if (!currentDateFilterDays || currentDateFilterDays <= 0) {
-      infoEl.textContent = "Filtre désactivé — tous les résultats sont affichés.";
-    } else if (currentDateFilterDays === 1) {
-      infoEl.textContent = "Affichage limité aux 24 dernières heures.";
-    } else if (currentDateFilterDays === 2) {
-      infoEl.textContent = "Affichage limité aux 48 dernières heures.";
-    } else {
-      infoEl.textContent = `Affichage limité aux ${currentDateFilterDays} derniers jours.`;
-    }
+    // On vide le texte systématiquement
+    infoEl.textContent = "";
   }
 
   function applyDateFilterSelection(days, options = {}) {
@@ -1019,6 +1088,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updateDateFilterInfo();
   }
 
+  // ---------------------------------------------------------------------------
+  // Mode recherche
+  // ---------------------------------------------------------------------------
+
   function openSearchMode() {
     if (!searchContainer || !searchToggleBtn || !filtersContainer || !controlsEl) return;
 
@@ -1055,7 +1128,31 @@ document.addEventListener("DOMContentLoaded", () => {
     renderFromState();
   }
 
-  // --- Settings popup ---
+  // ---------------------------------------------------------------------------
+  // Settings Popup
+  // ---------------------------------------------------------------------------
+
+  function setActiveSettingsSection(sectionId) {
+    activeSettingsSection = sectionId || "theme";
+
+    settingsNavItems.forEach((btn) => {
+      const id = btn.getAttribute("data-section");
+      btn.classList.toggle("active", id === activeSettingsSection);
+    });
+
+    settingsSections.forEach((section) => {
+      const id = section.getAttribute("data-section");
+      section.classList.toggle("active", id === activeSettingsSection);
+    });
+  }
+
+  settingsNavItems.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-section");
+      if (!id) return;
+      setActiveSettingsSection(id);
+    });
+  });
 
   function openSettings() {
     if (!overlay || !modal) return;
@@ -1081,7 +1178,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Logs popup ---
+  // ---------------------------------------------------------------------------
+  // Logs Popup
+  // ---------------------------------------------------------------------------
 
   function classifyLogLine(line) {
     const m = line.match(/^\[[^\]]+\]\s+\[[^\]]+\]\s+\[([^\]]+)\]/);
@@ -1158,6 +1257,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Détails (modal TMDB)
+  // ---------------------------------------------------------------------------
+
   function closeDetails() {
     if (!detailsOverlay || !detailsModal) return;
     detailsModal.classList.remove("show");
@@ -1168,7 +1271,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 200);
   }
 
-  function renderDetailsSkeleton(item, catKey) {
+  function renderDetailsSkeleton(item) {
     if (!detailsMetaEl || !detailsPlotEl || !detailsExtraEl) return;
 
     detailsMetaEl.innerHTML = "";
@@ -1353,8 +1456,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const isShowingRaw = detailsTitleEl.textContent === raw;
     detailsTitleEl.textContent = isShowingRaw ? clean : raw;
 
-    detailsOriginalToggle.classList.toggle("details-original-toggle-active", !isShowingRaw);
+    detailsOriginalToggle.classList.toggle(
+      "details-original-toggle-active",
+      !isShowingRaw
+    );
   });
+
+  // ---------------------------------------------------------------------------
+  // Scroll / header / controls
+  // ---------------------------------------------------------------------------
 
   window.addEventListener("scroll", () => {
     if (!headerEl) return;
@@ -1402,7 +1512,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Settings footer/version ---
+  // ---------------------------------------------------------------------------
+  // Footer / version
+  // ---------------------------------------------------------------------------
 
   async function initVersionFooter() {
     if (footerEl) {
@@ -1429,7 +1541,157 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // --- Events ---
+  // ---------------------------------------------------------------------------
+  // Rétention BDD
+  // ---------------------------------------------------------------------------
+
+  async function initRetentionSettings() {
+    if (!retentionDaysSelect) return;
+
+    try {
+      const res = await fetch("/api/retention");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      const days = Number(data.days);
+      if (!Number.isFinite(days) || days <= 0) return;
+
+      currentRetentionDays = days;
+
+      let found = false;
+      Array.from(retentionDaysSelect.options).forEach((opt) => {
+        if (Number(opt.value) === days) {
+          opt.selected = true;
+          found = true;
+        }
+      });
+
+      if (!found) {
+        const opt = document.createElement("option");
+        opt.value = String(days);
+        opt.textContent = `${days} jours`;
+        retentionDaysSelect.appendChild(opt);
+        retentionDaysSelect.value = String(days);
+      }
+
+      autosizeSelect(retentionDaysSelect);
+    } catch (err) {
+      console.error("Erreur initRetentionSettings:", err);
+    }
+  }
+
+  async function updateRetentionOnServer(newDays) {
+    if (!Number.isFinite(newDays) || newDays <= 0) return;
+
+    try {
+      const res = await fetch(`/api/retention?days=${encodeURIComponent(newDays)}`, {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        console.error("Erreur HTTP /api/retention:", res.status);
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.ok) {
+        console.error("Erreur API /api/retention:", data.error);
+        return;
+      }
+
+      currentRetentionDays = newDays;
+    } catch (err) {
+      console.error("updateRetentionOnServer error:", err);
+    } finally {
+      if (retentionDaysSelect) {
+        autosizeSelect(retentionDaysSelect);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sync global / refresh
+  // ---------------------------------------------------------------------------
+
+  async function triggerFullRefresh({ silent = false } = {}) {
+    if (!silent && loadingEl) {
+      loadingEl.classList.remove("hidden");
+      errorEl.classList.add("hidden");
+    }
+
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+      });
+
+      if (res.status === 409) {
+        console.warn("Sync déjà en cours, on recharge seulement le feed.");
+        await loadFeed();
+        return;
+      }
+
+      if (!res.ok) {
+        console.error("Erreur HTTP /api/sync:", res.status);
+        if (!silent && errorEl) {
+          errorEl.textContent = "Erreur lors de la synchronisation.";
+          errorEl.classList.remove("hidden");
+        }
+        await loadFeed();
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.ok && !silent && errorEl) {
+        errorEl.textContent =
+          data.error || "Erreur pendant la synchronisation.";
+        errorEl.classList.remove("hidden");
+      }
+
+      await loadFeed();
+    } catch (err) {
+      console.error("triggerFullRefresh error:", err);
+      if (!silent && errorEl) {
+        errorEl.textContent =
+          "Erreur réseau lors de la synchronisation.";
+        errorEl.classList.remove("hidden");
+      }
+      await loadFeed();
+    } finally {
+      if (!silent && loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
+    }
+  }
+
+  function clearRefreshTimer() {
+    if (refreshTimerId !== null) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+  }
+
+  function scheduleAutoRefresh(mode) {
+    clearRefreshTimer();
+
+    if (!mode || mode === "manual") {
+      return;
+    }
+
+    const minutes = parseInt(mode, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return;
+    }
+
+    const delayMs = minutes * 60 * 1000;
+
+    refreshTimerId = setInterval(() => {
+      triggerFullRefresh({ silent: true });
+    }, delayMs);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Events
+  // ---------------------------------------------------------------------------
 
   defaultSortSelect?.addEventListener("change", (e) => {
     const value = e.target.value || "seeders";
@@ -1453,7 +1715,6 @@ document.addEventListener("DOMContentLoaded", () => {
     applyDateFilterSelection(value);
   });
 
-  // ⭐ NOUVEAU : event sur le select "Affichage" (Compact / Normal / Large)
   cardSizeSelect?.addEventListener("change", (e) => {
     const value = e.target.value || "normal";
     const size =
@@ -1463,99 +1724,41 @@ document.addEventListener("DOMContentLoaded", () => {
     applyCardSize(size);
   });
 
-  // ---------------------------------------------------------------------------
-  // Rafraîchissement complet : API /api/sync + rechargement du feed
-  // ---------------------------------------------------------------------------
+  sortDirectionBtn?.addEventListener("click", () => {
+    if (sortDirectionBtn.disabled) return;
 
-  async function triggerFullRefresh({ silent = false } = {}) {
-    // On affiche un message basique si pas silent
-    if (!silent && loadingEl) {
-      loadingEl.classList.remove("hidden");
-      errorEl.classList.add("hidden");
+    sortDirection = sortDirection === "asc" ? "desc" : "asc";
+
+    if (sortDirectionIcon) {
+      sortDirectionIcon.style.transform =
+        sortDirection === "asc" ? "rotate(-90deg)" : "rotate(90deg)";
     }
 
-    try {
-      const res = await fetch("/api/sync", {
-        method: "POST",
-      });
+    renderFromState();
+  });
 
-      if (res.status === 409) {
-        // sync déjà en cours → on se contente de recharger la vue
-        console.warn("Sync déjà en cours, on recharge seulement le feed.");
-        await loadFeed();
-        return;
-      }
-
-      if (!res.ok) {
-        console.error("Erreur HTTP /api/sync:", res.status);
-        if (!silent && errorEl) {
-          errorEl.textContent = "Erreur lors de la synchronisation.";
-          errorEl.classList.remove("hidden");
-        }
-        // on recharge quand même le feed avec ce qu'il y a
-        await loadFeed();
-        return;
-      }
-
-      const data = await res.json();
-      if (!data.ok && !silent && errorEl) {
-        errorEl.textContent =
-          data.error || "Erreur pendant la synchronisation.";
-        errorEl.classList.remove("hidden");
-      }
-
-      // Une fois la sync terminée, on recharge les données en BDD
-      await loadFeed();
-    } catch (err) {
-      console.error("triggerFullRefresh error:", err);
-      if (!silent && errorEl) {
-        errorEl.textContent =
-          "Erreur réseau lors de la synchronisation.";
-        errorEl.classList.remove("hidden");
-      }
-      await loadFeed();
-    } finally {
-      if (!silent && loadingEl) {
-        loadingEl.classList.add("hidden");
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Rafraîchissement auto basé sur les paramètres (15 / 30 / 60 min)
-  // ---------------------------------------------------------------------------
-
-  function clearRefreshTimer() {
-    if (refreshTimerId !== null) {
-      clearInterval(refreshTimerId);
-      refreshTimerId = null;
-    }
-  }
-
-  function scheduleAutoRefresh(mode) {
-    clearRefreshTimer();
-
-    if (!mode || mode === "manual") {
-      return; // pas d'auto-refresh
-    }
-
-    const minutes = parseInt(mode, 10);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
+  retentionDaysSelect?.addEventListener("change", (e) => {
+    const value = parseInt(e.target.value, 10);
+    if (!Number.isFinite(value) || value <= 0) {
       return;
     }
 
-    const delayMs = minutes * 60 * 1000;
+    const newDays = value;
+    const oldDays = currentRetentionDays;
 
-    refreshTimerId = setInterval(() => {
-      // On ne spamme pas l'utilisateur : silent=true → pas de message d'erreur visible
-      triggerFullRefresh({ silent: true });
-    }, delayMs);
-  }
+    if (oldDays != null && newDays < oldDays) {
+      const ok = window.confirm(
+        `Attention : passer de ${oldDays} à ${newDays} jours va supprimer définitivement les éléments plus anciens.\n\nContinuer ?`
+      );
 
-  refreshIntervalSelect?.addEventListener("change", (e) => {
-    const value = e.target.value || "manual";
-    localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, value);
-    scheduleAutoRefresh(value);
+      if (!ok) {
+        e.target.value = String(oldDays);
+        autosizeSelect(retentionDaysSelect);
+        return;
+      }
+    }
+
+    updateRetentionOnServer(newDays);
   });
 
   refreshBtn?.addEventListener("click", () => {
@@ -1567,8 +1770,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   openLogsBtn?.addEventListener("click", openLogs);
   closeLogsBtn?.addEventListener("click", closeLogs);
-
-  // --- Recherche ---
 
   searchToggleBtn?.addEventListener("click", (e) => {
     e.preventDefault();
@@ -1623,13 +1824,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Selects + autosize + reload ---
   categorySelect?.addEventListener("change", (e) => {
     autosizeSelect(e.target);
+    updateSortDirectionButtonState();
     loadFeed();
   });
 
-  // Résultats : n'affecte que le rendu local, pas l'API
   limitSelect?.addEventListener("change", (e) => {
     autosizeSelect(e.target);
     renderFromState();
@@ -1650,21 +1850,35 @@ document.addEventListener("DOMContentLoaded", () => {
     controlsManuallyExpanded = true;
   });
 
+  // Chip de reset de filtre date
+  activeDateFilterChip?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".date-filter-chip-clear");
+    if (!btn) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    applyDateFilterSelection(defaultDateFilterDays || 0);
+  });
+
+  refreshIntervalSelect?.addEventListener("change", (e) => {
+    const value = e.target.value || "manual";
+    localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, value);
+    scheduleAutoRefresh(value);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Init globale
+  // ---------------------------------------------------------------------------
+
   (async () => {
+    await loadFavoritesFromApi();
     await initCategories();
     autosizeSelect(limitSelect);
     autosizeSelect(sortSelect);
     if (cardSizeSelect) autosizeSelect(cardSizeSelect);
-    initDateFilterPanel();
-    activeDateFilterChip?.addEventListener("click", (e) => {
-      const btn = e.target.closest(".date-filter-chip-clear");
-      if (!btn) return;
 
-      e.preventDefault();
-      e.stopPropagation();
-      applyDateFilterSelection(defaultDateFilterDays || 0);
-    });
-    // 🔹 Init du mode de rafraîchissement depuis le localStorage
+    initDateFilterPanel();
+
     if (refreshIntervalSelect) {
       const savedMode =
         localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY) || "manual";
@@ -1672,6 +1886,7 @@ document.addEventListener("DOMContentLoaded", () => {
       scheduleAutoRefresh(savedMode);
     }
 
+    await initRetentionSettings();
     await loadFeed();
     await initVersionFooter();
   })();

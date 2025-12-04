@@ -1,3 +1,7 @@
+// ============================================================================
+// IMPORTS & CONSTANTES GLOBALES
+// ============================================================================
+
 const express = require("express");
 const Parser = require("rss-parser");
 const Database = require("better-sqlite3");
@@ -9,6 +13,8 @@ const APP_VERSION = pkg.version;
 
 const PORT = process.env.PORT || 8080;
 
+// --- YGG / RSS --------------------------------------------------------------
+
 const RSS_PASSKEY = process.env.RSS_PASSKEY;
 
 const RSS_MOVIES_ID = process.env.RSS_MOVIES_ID || process.env.RSS_ID || "2183";
@@ -18,13 +24,29 @@ const RSS_ANIMATION_ID = process.env.RSS_ANIMATION_ID || "2178";
 const RSS_GAMES_ID = process.env.RSS_GAMES_ID || "2161";
 const RSS_SPECTACLE_ID = process.env.RSS_SPECTACLE_ID || "2185";
 
+// Mapping centralisé des catégories (sert pour RSS + API catégories + /api/feed all)
+const CATEGORY_CONFIGS = [
+  { key: "film",      label: "Films" },
+  { key: "series",    label: "Séries TV" },
+  { key: "emissions", label: "Émissions TV" },
+  { key: "spectacle", label: "Spectacles" },
+  { key: "animation", label: "Animation" },
+  { key: "games",     label: "Jeux vidéo" },
+];
+
+// --- TMDB -------------------------------------------------------------------
+
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500";
 
+// --- IGDB -------------------------------------------------------------------
+
 const IGDB_CLIENT_ID = process.env.IGDB_CLIENT_ID || "";
 const IGDB_CLIENT_SECRET = process.env.IGDB_CLIENT_SECRET || "";
 const IGDB_BASE_URL = "https://api.igdb.com/v4";
+
+// --- BDD / LOGS / RÉTENTION -------------------------------------------------
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "yggfeed.db");
 const SYNC_INTERVAL_MINUTES = Number(process.env.SYNC_INTERVAL_MINUTES || 10);
@@ -33,10 +55,14 @@ const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "yggfeed.log");
 const LOG_MAX_BYTES = Number(process.env.LOG_MAX_BYTES || 5 * 1024 * 1024);
 
 const DB_HISTORY_DAYS = Number(process.env.DB_HISTORY_DAYS || 7);
+let retentionDays = DB_HISTORY_DAYS;
 
-// -----------------------------------------------------------------------------
-// LOGS → niveaux + fichier + rotation simple
-// -----------------------------------------------------------------------------
+// Cache commun pour posters TMDB / IGDB
+const posterCache = new Map();
+
+// ============================================================================
+// LOGGING (fichier + rotation simple)
+// ============================================================================
 
 const LOG_LEVELS = {
   INFO: "INFO",
@@ -91,7 +117,6 @@ function writeLog(level, tag, message) {
   const line = `[${stamp}] [${level}] [${tag}] ${safeMsg}`;
 
   console.log(line);
-
   appendLogLine(line);
 
   logCount++;
@@ -104,20 +129,23 @@ const logInfo = (tag, msg) => writeLog(LOG_LEVELS.INFO, tag, msg);
 const logWarn = (tag, msg) => writeLog(LOG_LEVELS.WARN, tag, msg);
 const logError = (tag, msg) => writeLog(LOG_LEVELS.ERROR, tag, msg);
 
-// -----------------------------------------------------------------------------
-// CHECK CONFIG
-// -----------------------------------------------------------------------------
+// ============================================================================
+// VALIDATION CONFIG
+// ============================================================================
 
 if (!RSS_PASSKEY) {
   logError("CONFIG", "Missing RSS_PASSKEY env var");
   process.exit(1);
 }
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // EXPRESS APP
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 const app = express();
+
+// Si un jour tu ajoutes des POST JSON, on est déjà prêt
+app.use(express.json());
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -125,9 +153,9 @@ app.get("/version", (req, res) => {
   res.json({ version: APP_VERSION });
 });
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // SQLITE INIT
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
@@ -160,11 +188,16 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_items_category_seeders
     ON items (category, seeders DESC);
+
+  CREATE TABLE IF NOT EXISTS favorites (
+    guid TEXT PRIMARY KEY,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  );
 `);
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // RSS PARSER
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 const parser = new Parser({
   customFields: {
@@ -182,9 +215,9 @@ const parser = new Parser({
   },
 });
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // HELPERS CATEGORIES / URL RSS
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 function normalizeCategoryKey(raw) {
   const c = (raw || "film").toLowerCase();
@@ -199,41 +232,31 @@ function normalizeCategoryKey(raw) {
   return "film";
 }
 
+// mapping interne pour les IDs RSS
+const RSS_CATEGORY_IDS = {
+  film: RSS_MOVIES_ID,
+  series: RSS_SERIES_ID,
+  emissions: RSS_SHOWS_ID,
+  spectacle: RSS_SPECTACLE_ID,
+  animation: RSS_ANIMATION_ID,
+  games: RSS_GAMES_ID,
+};
+
 function getRssConfigForCategoryKey(catKey) {
-  let id;
-  switch (catKey) {
-    case "series":
-      id = RSS_SERIES_ID;
-      break;
-    case "emissions":
-      id = RSS_SHOWS_ID;
-      break;
-    case "spectacle":
-      id = RSS_SPECTACLE_ID;
-      break;
-    case "animation":
-      id = RSS_ANIMATION_ID;
-      break;
-    case "games":
-      id = RSS_GAMES_ID;
-      break;
-    case "film":
-    default:
-      id = RSS_MOVIES_ID;
-      break;
-  }
+  const key = normalizeCategoryKey(catKey);
+  const id = RSS_CATEGORY_IDS[key];
 
   if (!id) {
-    throw new Error(`No RSS ID configured for category "${catKey}"`);
+    throw new Error(`No RSS ID configured for category "${key}"`);
   }
 
   const url = `https://yggapi.eu/rss?id=${id}&passkey=${RSS_PASSKEY}`;
   return { id, url };
 }
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // HELPERS TITRE / QUALITÉ / EPISODE
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 function guessTitleAndYear(rawTitle = "", kind = "film") {
   if (!rawTitle) {
@@ -242,8 +265,10 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
 
   let t = rawTitle;
 
+  // on vire les crochets [ ... ]
   t = t.replace(/\[.*?\]/g, " ");
 
+  // séries : on coupe avant SxxExxx / Sxx
   if (kind === "series") {
     const seriesCutRegexes = [/\bS\d{1,2}E\d{1,3}\b/i, /\bS\d{1,2}\b/i];
     for (const re of seriesCutRegexes) {
@@ -325,7 +350,6 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
   const tagRegex = new RegExp(`\\b(${tags.join("|")})\\b`, "gi");
   name = name.replace(tagRegex, " ");
 
-  // Nettoyage fin
   name = name.replace(/[-–_:()\[\]]+$/g, "");
   name = name.replace(/\s+/g, " ").trim();
 
@@ -345,26 +369,21 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
 function extractEpisodeInfo(rawTitle = "") {
   if (!rawTitle) return null;
 
-  // On enlève les tags entre crochets qui parasitent
   let t = rawTitle.replace(/\[.*?\]/g, " ");
 
-  // 1) Forme classique S01E03
   const fullEp = t.match(/\bS\d{1,2}E\d{1,3}\b/i);
   if (fullEp) {
-    return fullEp[0].toUpperCase(); // ex: S01E03
+    return fullEp[0].toUpperCase();
   }
 
-  // 2) "Saison 1"
   const saisonWord = t.match(/\bSaison\s+\d{1,2}\b/i);
   if (saisonWord) {
-    // on normalise un peu les espaces
     return saisonWord[0].replace(/\s+/g, " ");
   }
 
-  // 3) Forme courte "S01" (sans E)
   const seasonOnly = t.match(/\bS\d{1,2}\b/i);
   if (seasonOnly) {
-    return seasonOnly[0].toUpperCase(); // ex: S01
+    return seasonOnly[0].toUpperCase();
   }
 
   return null;
@@ -375,7 +394,6 @@ function extractQuality(rawTitle = "") {
 
   const upper = rawTitle.toUpperCase();
 
-  // Résolution
   let resolution = null;
   if (/\b(2160P|4K)\b/.test(upper)) {
     resolution = "2160p";
@@ -385,7 +403,6 @@ function extractQuality(rawTitle = "") {
     resolution = "720p";
   }
 
-  // Codec
   let codec = null;
   if (/\b(HEVC|H\.?265|X265)\b/.test(upper)) {
     codec = "x265 / H.265";
@@ -402,64 +419,37 @@ function extractQuality(rawTitle = "") {
   return parts.length ? parts.join(" - ") : null;
 }
 
-// -----------------------------------------------------------------------------
-// Helpers spécifiques JEUX : titre "propre" pour affichage + IGDB
-// -----------------------------------------------------------------------------
+// ============================================================================
+// HELPERS JEUX (titre propre + requêtes IGDB)
+// ============================================================================
 
 function cleanGameTitle(rawTitle = "") {
   if (!rawTitle) return "";
 
   let t = rawTitle;
 
-  // 1) Blocs [ ... ] (plateforme, portable, etc.)
   t = t.replace(/\[.*?\]/g, " ");
-
-  // 2) Stats YGG (S:xx/L:xx)
   t = t.replace(/\(S:\d+\/L:\d+\)/gi, " ");
-
-  // 3) Parenthèses qui ne contiennent que de la "technique" (versions, builds, etc.)
-  //    Exemple : (v1.2.3), (1.0.0.23891), (v20251118), (86364)...
   t = t.replace(/\([^)]*\d[^)]*\)/g, " ");
-
-  // 4) Normaliser . et _ → espaces
   t = t.replace(/[._]/g, " ");
-
-  // 5) Groupes / plateformes / tags de release
   t = t.replace(
     /\b(FitGirl|Repack|ElAmigos|TENOKE|RUNE|Mephisto|GOG|PORTABLE|WIN|X64|X86|MULTI\d*|MULTI|EN|FR|VOICES\d+|Net8)\b/gi,
     " "
   );
 
-  // 6) Patterns avec "build" et IDs derrière
-  //    " / 20804565 build ...", " / build 20804565 ...", "build 20804565 ..."
   t = t.replace(/\s*\/\s*\d+\s*build\b.*$/i, " ");
   t = t.replace(/\s*\/\s*build\b.*$/i, " ");
   t = t.replace(/\bbuild\b.*$/i, " ");
-
-  // 7) Suffixes "Update ..."
-  //    "Dispatch (Update 1.0.16254)-ElAmigos"
   t = t.replace(/[:\-]\s*Update\b.*$/i, " ");
   t = t.replace(/\bUpdate\b.*$/i, " ");
-
-  // 8) Dates/IDs de type "2025-11-14-113464"
   t = t.replace(/\b\d{4}-\d{2}-\d{2}-\d+\b/g, " ");
-
-  // 9) Tokens de type "V20251118.8820.W"
   t = t.replace(/\bV\d{6,}(?:\.\d+)*\b/gi, " ");
-
-  // 10) Versions "v1.2.3", "1.4.0", "0.1.26.2.47138.12"
-  //     → on cible les chaînes avec au moins un point (v1.2, 1.4.0, 0.1.26.2...)
-  t = t.replace(/\bv\d+(?:[._]\d+){1,}\b/gi, " ");   // v1.2, v1.2.3 etc.
-  t = t.replace(/\b\d+(?:[._]\d+){1,}\b/gi, " ");    // 1.4.0, 0.1.26.2.47138.12
-
-  // 11) Gros IDs purement numériques (ex: "20804565") => on garde les petits nombres (2, 3, 4...)
+  t = t.replace(/\bv\d+(?:[._]\d+){1,}\b/gi, " ");
+  t = t.replace(/\b\d+(?:[._]\d+){1,}\b/gi, " ");
   t = t.replace(/\b\d{5,}\b/g, " ");
-
-  // 12) Nettoyage ponctuation / espaces
   t = t.replace(/[:\-–_]+$/g, " ");
   t = t.replace(/\s+/g, " ").trim();
 
-  // Fallback : au pire, on retourne le rawTitle un peu normalisé
   if (!t) {
     return rawTitle.replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
   }
@@ -467,47 +457,30 @@ function cleanGameTitle(rawTitle = "") {
   return t;
 }
 
-
 function cleanGameTitleForIgdb(rawTitle = "") {
   let t = cleanGameTitle(rawTitle);
   if (!t) return "";
 
-  // virer les suffixes genre Manual / CE
   t = t.replace(/\b(Manual|CE)\b.*$/i, " ");
-
-  // virer les suffixes d'édition + tout ce qui suit
-  // ex : "Royal Edition", "Deluxe Edition", "Ultimate Edition", "Relaunched"
   t = t.replace(
     /\b(Relaunched|Deluxe Edition|Ultimate Edition|Royal Edition|Digital Deluxe Edition|Complete Edition|Game of the Year)\b.*$/i,
     " "
   );
 
-  // cas " + 7 DLCs/Bonuses"
   t = t.replace(/\+\s*DLCs?\/?Bonuses?.*$/i, " ");
-
-  //  virer les suffixes "Update ..." (patchs)
-  // ex: "Ready or Not Update v97150" → "Ready or Not"
   t = t.replace(/\bUpdate\b.*$/i, " ");
-
-  // virer les suffixes "/ build 123456" ou " / 123456 build"
-  // ex: "Enshrouded / build 20801121" → "Enshrouded"
   t = t.replace(/\/\s*build\b.*$/i, " ");
   t = t.replace(/\bbuild\s*\d+\b.*$/i, " ");
-
-  // virer les suffixes "- P2P", "- Repack" etc
   t = t.replace(/\s*[-–]\s*(P2P|Repack.*)$/i, " ");
-
-  // clean final
   t = t.replace(/[:\-–_]+$/g, " ");
   t = t.replace(/\s+/g, " ").trim();
 
   return t;
 }
 
-
-// -----------------------------------------------------------------------------
+// ============================================================================
 // HELPERS TEXTE RSS (date / taille / seeders)
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 function getItemText(item) {
   return (
@@ -527,7 +500,6 @@ function getItemText(item) {
 function parseYggMeta(item) {
   const text = getItemText(item);
 
-  // Ajouté le: 13/11/2025 10:04:28
   let addedAtStr = null;
   const dateMatch = text.match(
     /Ajouté le\s*:\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i
@@ -536,7 +508,6 @@ function parseYggMeta(item) {
     addedAtStr = dateMatch[1];
   }
 
-  // Taille
   let sizeStr = null;
 
   const sizeMatch1 = text.match(
@@ -551,7 +522,6 @@ function parseYggMeta(item) {
     }
   }
 
-  // Seeders
   let seedersParsed = null;
   const seedMatch = text.match(/(\d+)\s*seeders?/i);
   if (seedMatch) {
@@ -580,11 +550,9 @@ function timestampFromYggDate(str) {
   return Number.isNaN(t) ? 0 : t;
 }
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // TMDB HELPERS + CACHE
-// -----------------------------------------------------------------------------
-
-const posterCache = new Map();
+// ============================================================================
 
 async function tmdbSearch(pathUrl, params) {
   const url = new URL(`${TMDB_BASE_URL}${pathUrl}`);
@@ -600,10 +568,13 @@ async function tmdbSearch(pathUrl, params) {
       logWarn("TMDB_HTTP", `HTTP ${resp.status} ${url.toString()}`);
       return null;
     }
+
     const data = await resp.json();
     if (!data.results || !data.results.length) return null;
+
     const best = data.results.find((r) => r.poster_path) || data.results[0];
     if (!best.poster_path) return null;
+
     return `https://image.tmdb.org/t/p/w342${best.poster_path}`;
   } catch (err) {
     logError("TMDB", `Erreur: ${err.message} ${url.toString()}`);
@@ -612,8 +583,7 @@ async function tmdbSearch(pathUrl, params) {
 }
 
 async function fetchPosterForTitle(rawTitle, categoryRaw) {
-  if (!TMDB_API_KEY) return null;
-  if (!rawTitle) return null;
+  if (!TMDB_API_KEY || !rawTitle) return null;
 
   const cacheKey = `${categoryRaw || "any"}::${rawTitle.toLowerCase()}`;
   if (posterCache.has(cacheKey)) {
@@ -622,15 +592,13 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
 
   const catKey = normalizeCategoryKey(categoryRaw);
 
-  // Pour les jeux vidéo on ne tente pas TMDB
+  // les jeux passent par IGDB
   if (catKey === "games") {
     posterCache.set(cacheKey, null);
     return null;
   }
 
-  // animation => film
-  const kind =
-    catKey === "series" || catKey === "emissions" ? "series" : "film";
+  const kind = catKey === "series" || catKey === "emissions" ? "series" : "film";
 
   const { cleanTitle, year } = guessTitleAndYear(rawTitle, kind);
   const queryBase =
@@ -645,7 +613,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
 
   let poster = null;
 
-  // 1) Movie FR + année
   if (year && kind === "film") {
     poster =
       (await tmdbSearch("/search/movie", {
@@ -656,7 +623,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
       })) || null;
   }
 
-  // 2) Movie FR sans année
   if (!poster && kind === "film") {
     poster = await tmdbSearch("/search/movie", {
       api_key: TMDB_API_KEY,
@@ -665,7 +631,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
     });
   }
 
-  // 3) Movie EN
   if (!poster && kind === "film") {
     poster = await tmdbSearch("/search/movie", {
       api_key: TMDB_API_KEY,
@@ -675,7 +640,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
     });
   }
 
-  // 4) TV FR
   if (!poster && kind === "series" && year) {
     poster = await tmdbSearch("/search/tv", {
       api_key: TMDB_API_KEY,
@@ -693,7 +657,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
     });
   }
 
-  // 5) TV EN
   if (!poster && kind === "series") {
     poster = await tmdbSearch("/search/tv", {
       api_key: TMDB_API_KEY,
@@ -702,7 +665,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
     });
   }
 
-  // 6) Dernier essai brut
   if (!poster && rawTitle !== queryBase) {
     const q = rawTitle.replace(/[._]/g, " ");
     poster =
@@ -729,12 +691,12 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
   return poster || null;
 }
 
-// -----------------------------------------------------------------------------
-// IGDB HELPERS + CACHE (pour les jeux vidéo)
-// -----------------------------------------------------------------------------
+// ============================================================================
+// IGDB HELPERS + CACHE (JEUX)
+// ============================================================================
 
 let igdbToken = null;
-let igdbTokenExpiry = 0; // timestamp en ms
+let igdbTokenExpiry = 0;
 
 async function getIgdbToken() {
   if (!IGDB_CLIENT_ID || !IGDB_CLIENT_SECRET) {
@@ -744,7 +706,6 @@ async function getIgdbToken() {
 
   const now = Date.now();
   if (igdbToken && now < igdbTokenExpiry - 60 * 1000) {
-    // on garde une marge de 60s avant expiration
     return igdbToken;
   }
 
@@ -783,7 +744,6 @@ async function igdbSearchGame(title) {
   const token = await getIgdbToken();
   if (!token) return null;
 
-  // on nettoie un minimum le titre (guillemets, etc.)
   const safeTitle = title.replace(/"/g, '\\"');
 
   const query = [
@@ -813,10 +773,7 @@ async function igdbSearchGame(title) {
       return null;
     }
 
-    // on privilégie ceux avec cover.image_id
-    const withCover = games.filter(
-      (g) => g.cover && g.cover.image_id
-    );
+    const withCover = games.filter((g) => g.cover && g.cover.image_id);
     const chosen = withCover[0] || games[0];
 
     if (!chosen.cover || !chosen.cover.image_id) {
@@ -824,7 +781,6 @@ async function igdbSearchGame(title) {
     }
 
     const imageId = chosen.cover.image_id;
-    // format standard IGDB : t_cover_big = ~600px de haut
     const url = `https://images.igdb.com/igdb/image/upload/t_cover_big/${imageId}.jpg`;
     return url;
   } catch (err) {
@@ -847,16 +803,12 @@ async function fetchIgdbCoverForTitle(rawTitle = "") {
     return null;
   }
 
-  // variantes de requêtes pour IGDB
   const queries = new Set();
   queries.add(mainTitle);
 
-  // si il y a " : " on tente aussi la partie avant
   if (mainTitle.includes(":")) {
     queries.add(mainTitle.split(":")[0].trim());
   }
-
-  // si il y a " - " ou " – " on tente aussi la partie avant
   if (mainTitle.includes(" - ")) {
     queries.add(mainTitle.split(" - ")[0].trim());
   }
@@ -889,10 +841,9 @@ async function fetchIgdbCoverForTitle(rawTitle = "") {
   return coverUrl || null;
 }
 
-
-// -----------------------------------------------------------------------------
-// SYNC INTELLIGENT : YGG -> SQLITE
-// -----------------------------------------------------------------------------
+// ============================================================================
+// SYNC YGG → SQLITE
+// ============================================================================
 
 const insertItemStmt = db.prepare(`
   INSERT INTO items (
@@ -930,8 +881,8 @@ async function syncCategory(catKey) {
   logInfo("SYNC", `Catégorie ${normCat} → id=${id} (YGGAPI)`);
 
   const feed = await parser.parseURL(url);
-
   const items = feed.items || [];
+
   logInfo("SYNC", `${normCat}: ${items.length} items RSS`);
 
   for (const item of items) {
@@ -943,12 +894,12 @@ async function syncCategory(catKey) {
       const { cleanTitle, year } = guessTitleAndYear(rawTitle, kind);
       const quality = extractQuality(rawTitle);
       const episode = kind === "series" ? extractEpisodeInfo(rawTitle) : null;
-      
+
       let displayTitle = cleanTitle || rawTitle;
       if (normCat === "games") {
         displayTitle = cleanGameTitle(rawTitle);
       }
-      
+
       const { addedAtStr, sizeStr, seedersParsed } = parseYggMeta(item);
 
       const guid = item.guid || item.link || rawTitle;
@@ -980,19 +931,15 @@ async function syncCategory(catKey) {
           : 0;
 
       const now = Date.now();
-
       const existing = getItemByGuidStmt.get(guid);
 
       if (!existing) {
-        // Nouveau torrent => TMDB (films/séries/émissions/anim) ou IGDB (jeux)
         let poster = null;
 
         try {
           if (normCat === "games") {
-            // Jeux vidéo → IGDB
             poster = await fetchIgdbCoverForTitle(rawTitle);
           } else if (TMDB_API_KEY) {
-            // Reste → TMDB
             poster = await fetchPosterForTitle(rawTitle, normCat);
           }
         } catch (e) {
@@ -1022,7 +969,6 @@ async function syncCategory(catKey) {
           now
         );
       } else {
-        // Déjà connu => update uniquement les champs qui bougent
         updateItemStmt.run(
           size,
           seeders,
@@ -1042,8 +988,21 @@ async function syncCategory(catKey) {
   return items.length;
 }
 
-function purgeOldItems(maxAgeDays = DB_HISTORY_DAYS) {
-  const days = Number.isFinite(maxAgeDays) && maxAgeDays > 0 ? maxAgeDays : DB_HISTORY_DAYS;
+// ============================================================================
+// PURGE BDD (rétention)
+// ============================================================================
+
+function purgeOldItems(maxAgeDays) {
+  // maxAgeDays prioritaire si fourni, sinon on prend retentionDays
+  const base = retentionDays;
+  const daysRaw =
+    typeof maxAgeDays === "number" && Number.isFinite(maxAgeDays) && maxAgeDays > 0
+      ? maxAgeDays
+      : base;
+
+  const days =
+    Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DB_HISTORY_DAYS;
+
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   const stmt = db.prepare(`
@@ -1067,7 +1026,8 @@ function purgeOldItems(maxAgeDays = DB_HISTORY_DAYS) {
 }
 
 async function syncAllCategories() {
-  const cats = ["film", "series", "emissions", "spectacle", "animation", "games"];
+  // on se base sur CATEGORY_CONFIGS pour ne jamais oublier une catégorie
+  const cats = CATEGORY_CONFIGS.map((c) => c.key);
 
   logInfo("SYNC", "Lancement de la synchronisation globale…");
 
@@ -1100,18 +1060,94 @@ async function syncAllCategories() {
   };
 }
 
-// -----------------------------------------------------------------------------
-// SYNC API HELPERS (éviter plusieurs sync en parallèle)
-// -----------------------------------------------------------------------------
+// ============================================================================
+// FAVORIS (API + BDD)
+// ============================================================================
+
+app.get("/api/favorites", (req, res) => {
+  const rows = db.prepare("SELECT guid FROM favorites").all();
+  res.json({ favorites: rows.map((r) => r.guid) });
+});
+
+app.post("/api/favorites/:guid", (req, res) => {
+  const guid = req.params.guid;
+  try {
+    db.prepare("INSERT OR IGNORE INTO favorites (guid) VALUES (?)").run(guid);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("POST /api/favorites error:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.delete("/api/favorites/:guid", (req, res) => {
+  const guid = req.params.guid;
+  try {
+    db.prepare("DELETE FROM favorites WHERE guid = ?").run(guid);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/favorites error:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ============================================================================
+// API RÉTENTION (durée de conservation en BDD)
+// ============================================================================
+
+app.get("/api/retention", (req, res) => {
+  res.json({
+    ok: true,
+    days: retentionDays,
+    defaultDays: DB_HISTORY_DAYS,
+  });
+});
+
+app.post("/api/retention", (req, res) => {
+  const raw = req.query.days;
+  const newDays = Number(raw);
+
+  if (!Number.isFinite(newDays) || newDays <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "Durée de rétention invalide",
+    });
+  }
+
+  const oldDays = retentionDays;
+  retentionDays = newDays;
+
+  logInfo(
+    "PURGE_CFG",
+    `Durée de rétention mise à jour: ${oldDays} jours → ${newDays} jours`
+  );
+
+  let purged = 0;
+  try {
+    // On purge immédiatement selon la nouvelle rétention
+    purged = purgeOldItems(newDays);
+  } catch (e) {
+    logError("PURGE_CFG", `Erreur purge après changement rétention: ${e.message}`);
+  }
+
+  return res.json({
+    ok: true,
+    previousDays: oldDays,
+    days: retentionDays,
+    purged,
+  });
+});
+
+// ============================================================================
+// SYNC API : empêcher plusieurs synchros en parallèle
+// ============================================================================
 
 let isSyncRunning = false;
 
 async function runGlobalSyncOnce() {
   if (isSyncRunning) {
     logWarn("SYNC", "Tentative de sync alors qu'une sync est déjà en cours.");
-    return {
-      alreadyRunning: true,
-    };
+    return { alreadyRunning: true };
   }
 
   isSyncRunning = true;
@@ -1135,49 +1171,102 @@ async function runGlobalSyncOnce() {
   }
 }
 
-// -----------------------------------------------------------------------------
-// SELECT EN BDD POUR /api/feed
-// -----------------------------------------------------------------------------
+// ============================================================================
+// SELECTS BDD POUR /api/feed
+// ============================================================================
 
 function selectItemsFromDb(category, sort, limitParam) {
   let orderBy = "added_at_ts DESC";
-  if (sort === "seeders") orderBy = "seeders DESC";
-  if (sort === "name") orderBy = "title COLLATE NOCASE ASC";
+  if (sort === "seeders") {
+    orderBy = "seeders DESC";
+  } else if (sort === "name") {
+    orderBy = "title COLLATE NOCASE ASC";
+  }
 
   let limitClause = "";
+  const params = [category];
   const limitNum = limitParam === "all" ? null : Number(limitParam);
+
   if (limitNum && !Number.isNaN(limitNum)) {
-    limitClause = `LIMIT ${limitNum}`;
+    limitClause = "LIMIT ?";
+    params.push(limitNum);
   }
 
   const sql = `
     SELECT
-      category,                    -- <--- AJOUT
-      title,
-      raw_title as rawTitle,
-      year,
-      episode,
-      size,
-      seeders,
-      quality,
-      added_at as addedAt,
-      added_at_ts as addedAtTs,
-      poster,
-      page_link as pageLink,
-      download_link as download
-    FROM items
-    WHERE category = ?
+      i.category,
+      i.title,
+      i.raw_title     AS rawTitle,
+      i.year,
+      i.episode,
+      i.size,
+      i.seeders,
+      i.quality,
+      i.added_at      AS addedAt,
+      i.added_at_ts   AS addedAtTs,
+      i.poster,
+      i.page_link     AS pageLink,
+      i.download_link AS download,
+      i.guid,
+      CASE WHEN f.guid IS NOT NULL THEN 1 ELSE 0 END AS isFavorite
+    FROM items i
+    LEFT JOIN favorites f ON f.guid = i.guid
+    WHERE i.category = ?
     ORDER BY ${orderBy}
     ${limitClause};
   `;
 
   const stmt = db.prepare(sql);
-  return stmt.all(category);
+  return stmt.all(...params);
 }
 
-// -----------------------------------------------------------------------------
-// API LOGS (pour le popup "Logs")
-// -----------------------------------------------------------------------------
+function selectFavoritesFromDb(sort, limitParam) {
+  let orderBy = "i.added_at_ts DESC";
+  if (sort === "seeders") {
+    orderBy = "i.seeders DESC";
+  } else if (sort === "name") {
+    orderBy = "i.title COLLATE NOCASE ASC";
+  }
+
+  const params = [];
+  let limitClause = "";
+  const limitNum = limitParam === "all" ? null : Number(limitParam);
+
+  if (limitNum && !Number.isNaN(limitNum)) {
+    limitClause = "LIMIT ?";
+    params.push(limitNum);
+  }
+
+  const sql = `
+    SELECT
+      i.category,
+      i.title,
+      i.raw_title     AS rawTitle,
+      i.year,
+      i.episode,
+      i.size,
+      i.seeders,
+      i.quality,
+      i.added_at      AS addedAt,
+      i.added_at_ts   AS addedAtTs,
+      i.poster,
+      i.page_link     AS pageLink,
+      i.download_link AS download,
+      i.guid,
+      1 AS isFavorite
+    FROM favorites f
+    JOIN items i ON i.guid = f.guid
+    ORDER BY ${orderBy}
+    ${limitClause};
+  `;
+
+  const stmt = db.prepare(sql);
+  return stmt.all(...params);
+}
+
+// ============================================================================
+// API LOGS (popup "Logs")
+// ============================================================================
 
 app.get("/api/logs", (req, res) => {
   const limit = Number(req.query.limit || 200);
@@ -1185,7 +1274,6 @@ app.get("/api/logs", (req, res) => {
   fs.readFile(LOG_FILE, "utf8", (err, data) => {
     if (err) {
       if (err.code === "ENOENT") {
-        // fichier pas encore créé
         return res.json({ lines: [] });
       }
       console.error("[LOGS] Erreur lecture fichier:", err.message);
@@ -1193,18 +1281,15 @@ app.get("/api/logs", (req, res) => {
     }
 
     const lines = data.split(/\r?\n/).filter(Boolean);
-
-    // on garde les N dernières lignes, mais on les renvoie dans l'ordre
-    // décroissant (la plus récente en premier)
     const tail = lines.slice(-limit).reverse();
 
     res.json({ lines: tail });
   });
 });
 
-// -----------------------------------------------------------------------------
-// API SYNC (lance une synchro globale YGG -> SQLite)
-// -----------------------------------------------------------------------------
+// ============================================================================
+// API SYNC (lance une synchro globale YGG → SQLite)
+// ============================================================================
 
 app.post("/api/sync", async (req, res) => {
   try {
@@ -1233,25 +1318,21 @@ app.post("/api/sync", async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // API CATEGORIES (pour le front)
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 app.get("/api/categories", (req, res) => {
   res.json([
-    { key: "all", label: "Tout" },
-    { key: "film", label: "Films" },
-    { key: "series", label: "Séries TV" },
-    { key: "emissions", label: "Émissions TV" },
-    { key: "spectacle", label: "Spectacles" },
-    { key: "animation", label: "Animation" },
-    { key: "games", label: "Jeux vidéo" },
+    { key: "all",       label: "Tout" },
+    { key: "favorites", label: "Favoris" },
+    ...CATEGORY_CONFIGS,
   ]);
 });
 
-// -----------------------------------------------------------------------------
-// API FEED (lit uniquement en BDD)
-// -----------------------------------------------------------------------------
+// ============================================================================
+// API FEED (lecture BDD uniquement)
+// ============================================================================
 
 app.get("/api/feed", (req, res) => {
   try {
@@ -1259,17 +1340,15 @@ app.get("/api/feed", (req, res) => {
     const limitParam = (req.query.limit || "all").toLowerCase();
     const category = req.query.category || "film";
 
-    if (category === "all") {
-      const catConfigs = [
-        { key: "film", label: "Films" },
-        { key: "series", label: "Séries TV" },
-        { key: "emissions", label: "Émissions TV" },
-        { key: "spectacle", label: "Spectacles" },
-        { key: "animation", label: "Animation" },
-        { key: "games", label: "Jeux vidéo" },
-      ];
+    // Catégorie "Favoris"
+    if (category === "favorites") {
+      const items = selectFavoritesFromDb(sort, limitParam);
+      return res.json({ items });
+    }
 
-      const groups = catConfigs.map((cfg) => {
+    // Catégorie "Tout" → regroupement par catégorie
+    if (category === "all") {
+      const groups = CATEGORY_CONFIGS.map((cfg) => {
         const items = selectItemsFromDb(cfg.key, sort, limitParam);
         return {
           key: cfg.key,
@@ -1290,9 +1369,9 @@ app.get("/api/feed", (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // API DETAILS (fiche détaillée via TMDB en FR)
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 app.get("/api/details", async (req, res) => {
   try {
@@ -1370,9 +1449,7 @@ app.get("/api/details", async (req, res) => {
     const best = results[0];
     const tmdbId = best.id;
 
-    const detailsUrl = new URL(
-      `${TMDB_BASE_URL}/${tmdbType}/${tmdbId}`
-    );
+    const detailsUrl = new URL(`${TMDB_BASE_URL}/${tmdbType}/${tmdbId}`);
     detailsUrl.searchParams.set("api_key", TMDB_API_KEY);
     detailsUrl.searchParams.set("language", "fr-FR");
     detailsUrl.searchParams.set("append_to_response", "credits,external_ids");
@@ -1447,7 +1524,7 @@ app.get("/api/details", async (req, res) => {
         ? d.production_countries.map((c) => c.name).join(", ")
         : null;
 
-    // Tagline comme "awards" (ça remplit la ligne bonus)
+    // Tagline comme "awards"
     const awards = d.tagline || null;
 
     // Poster
@@ -1476,7 +1553,7 @@ app.get("/api/details", async (req, res) => {
       runtime: runtime || null,
       genre,
       director,
-      writer: null, // TMDB ne donne pas exactement l'équivalent, on laisse null
+      writer: null,
       actors,
       plot: d.overview || null,
       language,
@@ -1497,9 +1574,9 @@ app.get("/api/details", async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------------
+// ============================================================================
 // LANCEMENT SERVEUR + SYNC PÉRIODIQUE
-// -----------------------------------------------------------------------------
+// ============================================================================
 
 app.listen(PORT, () => {
   logInfo("SERVER", `YGGFeed DB server running on http://localhost:${PORT}`);
