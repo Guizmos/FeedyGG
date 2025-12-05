@@ -325,13 +325,27 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSortDirectionButtonState();
   }
 
-  async function loadFeed() {
+  async function loadFeed(options = {}) {
+    const { useMinSkeleton = false } = options;
+
     statsEl.textContent = "";
-    resultsEl.innerHTML = "";
-    loadingEl.classList.remove("hidden");
     errorEl.classList.add("hidden");
     emptyEl.classList.add("hidden");
 
+    const hadCardsBefore = !!resultsEl.querySelector(".card");
+
+    if (!hadCardsBefore) {
+      // Premier chargement : on garde le loader classique
+      resultsEl.innerHTML = "";
+      loadingEl.classList.remove("hidden");
+    } else {
+      // Refresh / tri / changement de filtre : on passe les cartes en skeleton
+      loadingEl.classList.add("hidden");
+      const cards = resultsEl.querySelectorAll(".card");
+      cards.forEach((card) => card.classList.add("card--loading"));
+    }
+
+    // On reset la recherche locale
     currentSearch = "";
     if (searchInput) {
       searchInput.value = "";
@@ -347,13 +361,17 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const params = new URLSearchParams(paramsObj);
+    const startTime = performance.now();
 
     try {
       const res = await fetch(`/api/feed?${params.toString()}`);
       if (!res.ok) throw new Error("Erreur API");
       const data = await res.json();
 
-      loadingEl.classList.add("hidden");
+      const elapsed = performance.now() - startTime;
+      if (useMinSkeleton && elapsed < 1000) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 - elapsed));
+      }
 
       const categoryLabel =
         categorySelect.options[categorySelect.selectedIndex]?.textContent ||
@@ -373,6 +391,8 @@ document.addEventListener("DOMContentLoaded", () => {
         feedState.groups = [];
       }
 
+      // On re-render : les anciennes cartes (avec card--loading) sont détruites
+      loadingEl.classList.add("hidden");
       renderFromState();
     } catch (err) {
       console.error(err);
@@ -598,6 +618,51 @@ document.addEventListener("DOMContentLoaded", () => {
 
     setupCardResponsiveButtons(card);
     return card;
+  }
+
+  function renderSkeletonCards() {
+    if (!resultsEl) return;
+
+    responsiveCards.length = 0;
+    resultsEl.innerHTML = "";
+
+    const grid = document.createElement("div");
+    grid.className = "cards-grid cards-grid--skeleton";
+
+    const uiLimit = getUiLimit();
+    const count = Number.isFinite(uiLimit) ? Math.min(uiLimit, 8) : 8; // jusqu’à 8 skeletons max
+
+    for (let i = 0; i < count; i++) {
+      const card = document.createElement("div");
+      card.className = "card card--skeleton";
+
+      card.innerHTML = `
+        <div class="card-poster-wrap">
+          <div class="skeleton skeleton-poster"></div>
+        </div>
+
+        <div class="card-body">
+          <div class="card-title-row">
+            <div class="skeleton skeleton-line skeleton-title"></div>
+          </div>
+
+          <div class="card-sub">
+            <div class="skeleton skeleton-line skeleton-meta"></div>
+            <div class="skeleton skeleton-line skeleton-meta"></div>
+            <div class="skeleton skeleton-line skeleton-meta short"></div>
+          </div>
+
+          <div class="card-actions">
+            <div class="skeleton skeleton-pill skeleton-btn"></div>
+            <div class="skeleton skeleton-pill skeleton-btn"></div>
+          </div>
+        </div>
+      `.trim();
+
+      grid.appendChild(card);
+    }
+
+    resultsEl.appendChild(grid);
   }
 
   function renderItems(items) {
@@ -1736,11 +1801,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // ---------------------------------------------------------------------------
 
   async function triggerFullRefresh({ silent = false } = {}) {
-    if (!silent && loadingEl) {
-      loadingEl.classList.remove("hidden");
-      errorEl.classList.add("hidden");
-    }
-
     try {
       const res = await fetch("/api/sync", {
         method: "POST",
@@ -1748,7 +1808,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (res.status === 409) {
         console.warn("Sync déjà en cours, on recharge seulement le feed.");
-        await loadFeed();
+        await loadFeed({ useMinSkeleton: !silent });
         await updateLastSyncText();
         return;
       }
@@ -1759,7 +1819,7 @@ document.addEventListener("DOMContentLoaded", () => {
           errorEl.textContent = "Erreur lors de la synchronisation.";
           errorEl.classList.remove("hidden");
         }
-        await loadFeed();
+        await loadFeed({ useMinSkeleton: !silent });
         await updateLastSyncText();
         return;
       }
@@ -1771,7 +1831,7 @@ document.addEventListener("DOMContentLoaded", () => {
         errorEl.classList.remove("hidden");
       }
 
-      await loadFeed();
+      await loadFeed({ useMinSkeleton: !silent });
       await updateLastSyncText();
     } catch (err) {
       console.error("triggerFullRefresh error:", err);
@@ -1780,12 +1840,9 @@ document.addEventListener("DOMContentLoaded", () => {
           "Erreur réseau lors de la synchronisation.";
         errorEl.classList.remove("hidden");
       }
-      await loadFeed();
+      await loadFeed({ useMinSkeleton: !silent });
       await updateLastSyncText();
     } finally {
-      if (!silent && loadingEl) {
-        loadingEl.classList.add("hidden");
-      }
       updateLastSyncStatus();
     }
   }
