@@ -125,7 +125,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsNavItems = document.querySelectorAll(".settings-nav-item");
   const settingsSections = document.querySelectorAll(".settings-section");
   const refreshIntervalSelect = document.getElementById("refresh-interval-select");
-  const REFRESH_INTERVAL_STORAGE_KEY = "refreshIntervalMode";
   const sortSelect = document.getElementById("sort-select");
   const sortDirectionBtn = document.getElementById("sort-direction-btn");
   const sortDirectionIcon = sortDirectionBtn?.querySelector(".sort-rotate-icon");
@@ -134,6 +133,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const CARD_SIZE_STORAGE_KEY = "cardSize";
   const footerEl = document.getElementById("app-footer");
   const appVersionEl = document.getElementById("app-version");
+  const lastSyncTextEl = document.getElementById("last-sync-text");
+  const lastSyncValueEl = document.getElementById("last-sync-value");
+  const cleanupPostersBtn = document.getElementById("cleanup-posters-btn");
+  const cleanupPostersStatus = document.getElementById("cleanup-posters-status");
 
   let activeSettingsSection = "theme";
   let currentDateFilterDays = null;
@@ -454,7 +457,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const posterWrap = document.createElement("div");
     posterWrap.className = "card-poster-wrap";
 
-    const posterUrl = item.poster || item.posterUrl;
+    const posterUrl = item.posterUrl || item.poster;
     if (posterUrl) {
       const img = document.createElement("img");
       img.src = posterUrl;
@@ -1541,6 +1544,77 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function updateLastSyncText() {
+    if (!lastSyncTextEl) return;
+
+    try {
+      const res = await fetch("/api/status");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+
+      const data = await res.json();
+
+      if (!data.lastSyncAt) {
+        lastSyncTextEl.textContent =
+          "Date de la dernière synchronisation : inconnue";
+        return;
+      }
+
+      const d = new Date(data.lastSyncAt);
+      if (Number.isNaN(d.getTime())) {
+        lastSyncTextEl.textContent =
+          "Date de la dernière synchronisation : inconnue";
+        return;
+      }
+
+      const formatted = d.toLocaleString("fr-FR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      lastSyncTextEl.textContent =
+        "Date de la dernière synchronisation : " + formatted;
+    } catch (err) {
+      console.error("Erreur updateLastSyncText:", err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dernière synchronisation (status backend)
+  // ---------------------------------------------------------------------------
+
+  function formatLastSyncLabel(iso) {
+    if (!iso) return "inconnue";
+
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "inconnue";
+
+    const datePart = d.toLocaleDateString("fr-FR");
+    const timePart = d.toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    return `${datePart} à ${timePart}`;
+  }
+
+  async function updateLastSyncStatus() {
+    if (!lastSyncValueEl) return;
+
+    try {
+      const res = await fetch("/api/status", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+
+      const data = await res.json();
+      lastSyncValueEl.textContent = formatLastSyncLabel(data.lastSyncAt);
+    } catch (err) {
+      console.error("Erreur /api/status:", err);
+      lastSyncValueEl.textContent = "inconnue";
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Rétention BDD
   // ---------------------------------------------------------------------------
@@ -1610,6 +1684,54 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------------------------------------------------------------------------
+  // Nettoyage des affiches orphelines
+  // ---------------------------------------------------------------------------
+
+  async function cleanupOrphanPosters() {
+    if (!cleanupPostersStatus) return;
+
+    const ok = window.confirm(
+      "Cette opération va supprimer les fichiers d'affiches qui ne sont plus utilisés.\n\nContinuer ?"
+    );
+    if (!ok) return;
+
+    cleanupPostersStatus.textContent = "Nettoyage en cours…";
+
+    try {
+      const res = await fetch("/api/admin/posters/cleanup-orphans", {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        throw new Error("HTTP " + res.status);
+      }
+
+      const data = await res.json();
+      const n = Number(data.deletedCount);
+      const hasCount = Number.isFinite(n);
+
+      if (data.ok && hasCount) {
+        if (n === 0) {
+          cleanupPostersStatus.textContent =
+            "Aucune affiche orpheline à supprimer.";
+        } else {
+          cleanupPostersStatus.textContent =
+            `${n} affiche${n > 1 ? "s" : ""} orpheline${n > 1 ? "s" : ""} supprimée${n > 1 ? "s" : ""}.`;
+        }
+      } else if (data.ok) {
+        cleanupPostersStatus.textContent = "Nettoyage terminé.";
+      } else {
+        cleanupPostersStatus.textContent =
+          data.error || "Erreur pendant le nettoyage des affiches.";
+      }
+    } catch (err) {
+      console.error("cleanupOrphanPosters error:", err);
+      cleanupPostersStatus.textContent =
+        "Erreur réseau lors du nettoyage des affiches.";
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Sync global / refresh
   // ---------------------------------------------------------------------------
 
@@ -1627,6 +1749,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (res.status === 409) {
         console.warn("Sync déjà en cours, on recharge seulement le feed.");
         await loadFeed();
+        await updateLastSyncText();
         return;
       }
 
@@ -1637,6 +1760,7 @@ document.addEventListener("DOMContentLoaded", () => {
           errorEl.classList.remove("hidden");
         }
         await loadFeed();
+        await updateLastSyncText();
         return;
       }
 
@@ -1648,6 +1772,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       await loadFeed();
+      await updateLastSyncText();
     } catch (err) {
       console.error("triggerFullRefresh error:", err);
       if (!silent && errorEl) {
@@ -1656,10 +1781,12 @@ document.addEventListener("DOMContentLoaded", () => {
         errorEl.classList.remove("hidden");
       }
       await loadFeed();
+      await updateLastSyncText();
     } finally {
       if (!silent && loadingEl) {
         loadingEl.classList.add("hidden");
       }
+      updateLastSyncStatus();
     }
   }
 
@@ -1670,24 +1797,90 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function scheduleAutoRefresh(mode) {
+  function scheduleAutoRefresh(minutes) {
     clearRefreshTimer();
 
-    if (!mode || mode === "manual") {
+    const m = Number(minutes);
+    if (!Number.isFinite(m) || m <= 0) {
       return;
     }
 
-    const minutes = parseInt(mode, 10);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
-      return;
-    }
-
-    const delayMs = minutes * 60 * 1000;
+    const delayMs = m * 60 * 1000;
 
     refreshTimerId = setInterval(() => {
       triggerFullRefresh({ silent: true });
     }, delayMs);
   }
+
+  async function updateSyncIntervalOnServer(newMinutes) {
+    try {
+      const payload = { minutes: Number(newMinutes) || 0 };
+
+      const res = await fetch("/api/config/sync-interval", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        console.error("Erreur HTTP /api/config/sync-interval:", res.status);
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.ok) {
+        console.error("Erreur API /api/config/sync-interval:", data.error);
+      }
+    } catch (err) {
+      console.error("updateSyncIntervalOnServer error:", err);
+    }
+  }
+
+  async function initSyncIntervalSettings() {
+    if (!refreshIntervalSelect) return;
+
+    try {
+      const res = await fetch("/api/config/sync-interval", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+
+      const data = await res.json();
+
+      let minutes = Number(data.minutes);
+      if (!Number.isFinite(minutes)) {
+        const def = Number(data.defaultMinutes);
+        minutes = Number.isFinite(def) ? def : 30;
+      }
+
+      let selectValue = "manual";
+      if (minutes > 0) {
+        selectValue = String(minutes);
+
+        let found = false;
+        Array.from(refreshIntervalSelect.options).forEach((opt) => {
+          if (opt.value === selectValue) {
+            found = true;
+          }
+        });
+
+        if (!found) {
+          const opt = document.createElement("option");
+          opt.value = selectValue;
+          opt.textContent = `${minutes} min`;
+          refreshIntervalSelect.appendChild(opt);
+        }
+      }
+
+      refreshIntervalSelect.value = selectValue;
+      autosizeSelect(refreshIntervalSelect);
+
+      scheduleAutoRefresh(minutes);
+    } catch (err) {
+      console.error("Erreur initSyncIntervalSettings:", err);
+    }
+  }
+
 
   // ---------------------------------------------------------------------------
   // Events
@@ -1850,7 +2043,6 @@ document.addEventListener("DOMContentLoaded", () => {
     controlsManuallyExpanded = true;
   });
 
-  // Chip de reset de filtre date
   activeDateFilterChip?.addEventListener("click", (e) => {
     const btn = e.target.closest(".date-filter-chip-clear");
     if (!btn) return;
@@ -1860,10 +2052,26 @@ document.addEventListener("DOMContentLoaded", () => {
     applyDateFilterSelection(defaultDateFilterDays || 0);
   });
 
-  refreshIntervalSelect?.addEventListener("change", (e) => {
+  refreshIntervalSelect?.addEventListener("change", async (e) => {
     const value = e.target.value || "manual";
-    localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, value);
-    scheduleAutoRefresh(value);
+
+    let minutes = 0;
+    if (value !== "manual") {
+      const n = parseInt(value, 10);
+      if (Number.isFinite(n) && n > 0) {
+        minutes = n;
+      }
+    }
+
+    autosizeSelect(e.target);
+    await updateSyncIntervalOnServer(minutes);
+    scheduleAutoRefresh(minutes);
+  });
+
+
+  cleanupPostersBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    cleanupOrphanPosters();
   });
 
   // ---------------------------------------------------------------------------
@@ -1880,14 +2088,13 @@ document.addEventListener("DOMContentLoaded", () => {
     initDateFilterPanel();
 
     if (refreshIntervalSelect) {
-      const savedMode =
-        localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY) || "manual";
-      refreshIntervalSelect.value = savedMode;
-      scheduleAutoRefresh(savedMode);
+      await initSyncIntervalSettings();
     }
 
     await initRetentionSettings();
     await loadFeed();
     await initVersionFooter();
+    await updateLastSyncText();
+    await updateLastSyncStatus();
   })();
 });

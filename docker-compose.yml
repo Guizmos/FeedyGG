@@ -15,8 +15,6 @@ services:
       - IGDB_CLIENT_ID=IGDBCLIENTID
       - IGDB_CLIENT_SECRET=IGDBCLIENTSECRET
       - DB_PATH=/data/yggfeed.db
-      - DB_HISTORY_DAYS=7
-      - SYNC_INTERVAL_MINUTES=0
       - LOG_FILE=/data/yggfeed.log
       - LOG_MAX_BYTES=5242880
     volumes:

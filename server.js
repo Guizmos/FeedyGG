@@ -13,8 +13,6 @@ const APP_VERSION = pkg.version;
 
 const PORT = process.env.PORT || 8080;
 
-// --- YGG / RSS --------------------------------------------------------------
-
 const RSS_PASSKEY = process.env.RSS_PASSKEY;
 
 const RSS_MOVIES_ID = process.env.RSS_MOVIES_ID || process.env.RSS_ID || "2183";
@@ -24,7 +22,6 @@ const RSS_ANIMATION_ID = process.env.RSS_ANIMATION_ID || "2178";
 const RSS_GAMES_ID = process.env.RSS_GAMES_ID || "2161";
 const RSS_SPECTACLE_ID = process.env.RSS_SPECTACLE_ID || "2185";
 
-// Mapping centralisé des catégories (sert pour RSS + API catégories + /api/feed all)
 const CATEGORY_CONFIGS = [
   { key: "film",      label: "Films" },
   { key: "series",    label: "Séries TV" },
@@ -34,30 +31,30 @@ const CATEGORY_CONFIGS = [
   { key: "games",     label: "Jeux vidéo" },
 ];
 
-// --- TMDB -------------------------------------------------------------------
-
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500";
-
-// --- IGDB -------------------------------------------------------------------
 
 const IGDB_CLIENT_ID = process.env.IGDB_CLIENT_ID || "";
 const IGDB_CLIENT_SECRET = process.env.IGDB_CLIENT_SECRET || "";
 const IGDB_BASE_URL = "https://api.igdb.com/v4";
 
-// --- BDD / LOGS / RÉTENTION -------------------------------------------------
-
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "yggfeed.db");
-const SYNC_INTERVAL_MINUTES = Number(process.env.SYNC_INTERVAL_MINUTES || 10);
+const DATA_DIR = process.env.DATA_DIR || path.dirname(DB_PATH);
+const POSTERS_DIR = process.env.POSTERS_DIR || path.join(path.dirname(DB_PATH), "posters");
+
+const DEFAULT_SYNC_INTERVAL_MINUTES = 30;
+let currentSyncIntervalMinutes = DEFAULT_SYNC_INTERVAL_MINUTES;
+let syncIntervalHandle = null;
 
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "yggfeed.log");
 const LOG_MAX_BYTES = Number(process.env.LOG_MAX_BYTES || 5 * 1024 * 1024);
 
-const DB_HISTORY_DAYS = Number(process.env.DB_HISTORY_DAYS || 7);
-let retentionDays = DB_HISTORY_DAYS;
+const DEFAULT_RETENTION_DAYS = 7;
+let retentionDays = DEFAULT_RETENTION_DAYS;
 
-// Cache commun pour posters TMDB / IGDB
+let lastSyncAt = null;
+
 const posterCache = new Map();
 
 // ============================================================================
@@ -144,9 +141,16 @@ if (!RSS_PASSKEY) {
 
 const app = express();
 
-// Si un jour tu ajoutes des POST JSON, on est déjà prêt
 app.use(express.json());
 
+try {
+  fs.mkdirSync(POSTERS_DIR, { recursive: true });
+  logInfo("POSTERS", `Dossier des affiches prêt: ${POSTERS_DIR}`);
+} catch (e) {
+  logError("POSTERS", `Impossible de créer le dossier des affiches: ${e.message}`);
+}
+
+app.use("/posters", express.static(POSTERS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/version", (req, res) => {
@@ -195,6 +199,506 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS posters (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider    TEXT NOT NULL,
+    media_type  TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    file_path   TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    last_access INTEGER,
+    UNIQUE (provider, media_type, external_id)
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+`);
+
+// ============================================================================
+// SETTINGS GLOBAUX (table settings) + intervalle de sync
+// ============================================================================
+
+const getSettingStmt = db.prepare(`
+  SELECT value
+  FROM settings
+  WHERE key = ?
+`);
+
+const upsertSettingStmt = db.prepare(`
+  INSERT INTO settings (key, value, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at
+`);
+
+function loadSyncIntervalFromDb() {
+  try {
+    const row = getSettingStmt.get("sync_interval_minutes");
+    if (row && row.value != null) {
+      const v = Number(row.value);
+      if (Number.isFinite(v)) {
+        return v;
+      }
+    }
+  } catch (err) {
+    logError("SETTINGS", `Erreur lecture sync_interval_minutes: ${err.message}`);
+  }
+  return DEFAULT_SYNC_INTERVAL_MINUTES;
+}
+
+function saveSyncIntervalToDb(minutes) {
+  const now = Date.now();
+  try {
+    upsertSettingStmt.run("sync_interval_minutes", String(minutes), now);
+  } catch (err) {
+    logError("SETTINGS", `Erreur écriture sync_interval_minutes: ${err.message}`);
+  }
+}
+
+function loadRetentionDaysFromDb() {
+  try {
+    const row = getSettingStmt.get("retention_days");
+    if (row && row.value != null) {
+      const v = Number(row.value);
+      if (Number.isFinite(v) && v > 0) {
+        return v;
+      }
+    }
+  } catch (err) {
+    logError("SETTINGS", `Erreur lecture retention_days: ${err.message}`);
+  }
+  return DEFAULT_RETENTION_DAYS;
+}
+
+function saveRetentionDaysToDb(days) {
+  const now = Date.now();
+  try {
+    upsertSettingStmt.run("retention_days", String(days), now);
+  } catch (err) {
+    logError("SETTINGS", `Erreur écriture retention_days: ${err.message}`);
+  }
+}
+
+/**
+ * (Re)programme la sync périodique.
+ * minutes <= 0  => pas de sync automatique.
+ */
+function schedulePeriodicSync(minutes) {
+  if (syncIntervalHandle) {
+    clearInterval(syncIntervalHandle);
+    syncIntervalHandle = null;
+  }
+
+  const m = Number(minutes);
+  currentSyncIntervalMinutes = m;
+
+  if (!Number.isFinite(m) || m <= 0) {
+    logWarn("SYNC", "Intervalle <= 0 → pas de synchronisation automatique");
+    return;
+  }
+
+  const ms = m * 60 * 1000;
+  logInfo("SYNC", `Programmation: toutes les ${m} minutes`);
+
+  syncIntervalHandle = setInterval(() => {
+    syncAllCategories().catch((e) =>
+      logError("SYNC_PERIODIC", `Erreur: ${e.message}`)
+    );
+  }, ms);
+}
+
+// ============================================================================
+// PREPARED STATEMENTS POUR LES AFFICHES LOCALES (TABLE posters)
+// ============================================================================
+
+const selectPosterStmt = db.prepare(`
+  SELECT file_path
+  FROM posters
+  WHERE provider = ?
+    AND media_type = ?
+    AND external_id = ?
+`);
+
+const insertPosterStmtLocal = db.prepare(`
+  INSERT INTO posters (
+    provider, media_type, external_id, file_path, created_at, last_access
+  ) VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+const updatePosterLastAccessStmt = db.prepare(`
+  UPDATE posters
+  SET last_access = ?
+  WHERE provider = ?
+    AND media_type = ?
+    AND external_id = ?
+`);
+
+const deletePosterStmt = db.prepare(`
+  DELETE FROM posters
+  WHERE provider = ?
+    AND media_type = ?
+    AND external_id = ?
+`);
+
+const countItemsUsingPosterStmt = db.prepare(`
+  SELECT COUNT(*) AS cnt
+  FROM items
+  WHERE poster LIKE ?
+`);
+
+// ============================================================================
+// HELPERS FICHIERS POUR LES AFFICHES
+// ============================================================================
+
+async function downloadImageToFile(url, destPath) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      logWarn("POSTERS_DL", `HTTP ${resp.status} pour ${url}`);
+      return false;
+    }
+
+    const arrayBuffer = await resp.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    await fs.promises.writeFile(destPath, buffer);
+    return true;
+  } catch (err) {
+    logError("POSTERS_DL", `Erreur téléchargement ${url} → ${destPath}: ${err.message}`);
+    return false;
+  }
+}
+
+// ============================================================================
+// CACHE D'AFFICHES LOCALES (DB + FILESYSTEM)
+// ============================================================================
+
+function buildPosterFileName(provider, mediaType, externalId) {
+  const safeProvider = String(provider || "unknown")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
+
+  const safeMediaType = String(mediaType || "any")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
+
+  const safeId = String(externalId || "id")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
+
+  return `${safeProvider}_${safeMediaType}_${safeId}.jpg`;
+}
+
+/**
+ * Garantit la présence d'une affiche en local et renvoie l'URL /posters/...
+ *
+ * @param {Object} params
+ * @param {string} params.provider
+ * @param {string} params.mediaType
+ * @param {string|number} params.externalId
+ * @param {string} [params.remoteUrl]
+ *
+ * @returns {Promise<string|null>}
+ */
+async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl }) {
+  if (!provider || !mediaType || externalId == null) {
+    logWarn(
+      "POSTERS",
+      `ensureLocalPoster appelé sans provider/mediaType/externalId valides (provider="${provider}", mediaType="${mediaType}", externalId="${externalId}")`
+    );
+    return null;
+  }
+
+  const now = Date.now();
+  const providerKey = String(provider).toLowerCase();
+  const mediaTypeKey = String(mediaType).toLowerCase();
+  const externalIdKey = String(externalId);
+
+  let row = selectPosterStmt.get(providerKey, mediaTypeKey, externalIdKey);
+
+  if (row && row.file_path) {
+    const absPath = path.join(POSTERS_DIR, row.file_path);
+
+    if (fs.existsSync(absPath)) {
+      try {
+        updatePosterLastAccessStmt.run(now, providerKey, mediaTypeKey, externalIdKey);
+      } catch (err) {
+        logError("POSTERS", `Erreur update last_access: ${err.message}`);
+      }
+
+      return `/posters/${row.file_path}`;
+    }
+
+    try {
+      deletePosterStmt.run(providerKey, mediaTypeKey, externalIdKey);
+      logWarn(
+        "POSTERS",
+        `Entrée poster orpheline supprimée (fichier manquant): provider=${providerKey}, mediaType=${mediaTypeKey}, externalId=${externalIdKey}`
+      );
+    } catch (err) {
+      logError("POSTERS", `Erreur suppression entrée orpheline: ${err.message}`);
+    }
+
+    row = null;
+  }
+
+  if (!remoteUrl) {
+    logWarn(
+      "POSTERS",
+      `Aucun poster local et pas de remoteUrl fourni (provider=${providerKey}, mediaType=${mediaTypeKey}, externalId=${externalIdKey})`
+    );
+    return null;
+  }
+
+  const fileName = buildPosterFileName(providerKey, mediaTypeKey, externalIdKey);
+  const filePathRelative = fileName;
+  const absPath = path.join(POSTERS_DIR, fileName);
+
+  const ok = await downloadImageToFile(remoteUrl, absPath);
+  if (!ok) {
+    return null;
+  }
+
+  try {
+    insertPosterStmtLocal.run(
+      providerKey,
+      mediaTypeKey,
+      externalIdKey,
+      filePathRelative,
+      now,
+      now
+    );
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) {
+      logWarn(
+        "POSTERS",
+        `Conflit UNIQUE sur posters (provider=${providerKey}, mediaType=${mediaTypeKey}, externalId=${externalIdKey}), on ignore.`
+      );
+    } else {
+      logError("POSTERS", `Erreur insert poster: ${err.message}`);
+    }
+  }
+
+  return `/posters/${filePathRelative}`;
+}
+
+// ============================================================================
+// PURGE DES AFFICHES APRÈS SUPPRESSION D'ITEMS
+// ============================================================================
+
+function cleanupPostersAfterItemsPurge(deletedItems) {
+  if (!Array.isArray(deletedItems) || deletedItems.length === 0) {
+    return;
+  }
+
+  const posterKeyMap = new Map();
+
+  for (const row of deletedItems) {
+    if (!row || !row.poster) continue;
+
+    const itemLike = {
+      category: row.category,
+      poster: row.poster,
+    };
+
+    const params = buildPosterCacheParamsFromItem(itemLike);
+    if (!params) continue;
+
+    const { provider, mediaType, externalId } = params;
+    const keyStr = `${provider}||${mediaType}||${externalId}`;
+
+    if (!posterKeyMap.has(keyStr)) {
+      posterKeyMap.set(keyStr, params);
+    }
+  }
+
+  if (posterKeyMap.size === 0) {
+    return;
+  }
+
+  for (const params of posterKeyMap.values()) {
+    const { provider, mediaType, externalId, remoteUrl } = params;
+    const externalIdKey = String(externalId);
+
+    let remaining = 0;
+    try {
+      const row = countItemsUsingPosterStmt.get(`%${externalIdKey}%`);
+      remaining = row ? row.cnt : 0;
+    } catch (err) {
+      logError(
+        "POSTERS_PURGE",
+        `Erreur countItemsUsingPoster pour externalId=${externalIdKey}: ${err.message}`
+      );
+      continue;
+    }
+
+    if (remaining > 0) {
+      continue;
+    }
+
+    try {
+      deletePosterStmt.run(provider, mediaType, externalIdKey);
+    } catch (err) {
+      logError(
+        "POSTERS_PURGE",
+        `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`
+      );
+    }
+
+    const fileName = buildPosterFileName(provider, mediaType, externalIdKey);
+    const absPath = path.join(POSTERS_DIR, fileName);
+
+    try {
+      if (fs.existsSync(absPath)) {
+        fs.unlinkSync(absPath);
+        logInfo(
+          "POSTERS_PURGE",
+          `Affiche supprimée: ${absPath} (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey})`
+        );
+      }
+    } catch (err) {
+      logError(
+        "POSTERS_PURGE",
+        `Erreur suppression fichier d'affiche ${absPath}: ${err.message}`
+      );
+    }
+  }
+}
+
+// ============================================================================
+// NETTOYAGE GLOBAL DES AFFICHES ORPHELINES (DB + FILESYSTEM)
+// ============================================================================
+
+function cleanupPosterOrphans() {
+  let dbRemoved = 0;
+  let fsRemoved = 0;
+
+  // --- Phase 1 : entrées DB "posters" sans aucun item associé ---
+  try {
+    const orphanRowsStmt = db.prepare(`
+      SELECT p.provider, p.media_type, p.external_id, p.file_path
+      FROM posters p
+      LEFT JOIN items i
+        ON i.poster LIKE '%' || p.external_id || '%'
+      WHERE i.guid IS NULL
+    `);
+
+    const orphanRows = orphanRowsStmt.all() || [];
+
+    for (const row of orphanRows) {
+      const provider = row.provider;
+      const mediaType = row.media_type;
+      const externalIdKey = String(row.external_id);
+      const filePathRel = row.file_path;
+
+      try {
+        deletePosterStmt.run(provider, mediaType, externalIdKey);
+        dbRemoved++;
+      } catch (err) {
+        logError(
+          "POSTERS_CLEANUP",
+          `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`
+        );
+      }
+
+      if (filePathRel) {
+        const absPath = path.join(POSTERS_DIR, filePathRel);
+        try {
+          if (fs.existsSync(absPath)) {
+            fs.unlinkSync(absPath);
+            fsRemoved++;
+            logInfo(
+              "POSTERS_CLEANUP",
+              `Fichier d'affiche supprimé (orphelin DB): ${absPath}`
+            );
+          }
+        } catch (err) {
+          logError(
+            "POSTERS_CLEANUP",
+            `Erreur suppression fichier d'affiche (orphelin DB) ${absPath}: ${err.message}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    logError("POSTERS_CLEANUP", `Erreur phase 1 (DB orpheline): ${err.message}`);
+  }
+
+  // --- Phase 2 : fichiers sur disque sans entrée DB ---
+  try {
+    if (!fs.existsSync(POSTERS_DIR)) {
+      logWarn("POSTERS_CLEANUP", `POSTERS_DIR n'existe pas: ${POSTERS_DIR}`);
+    } else {
+      const files = fs.readdirSync(POSTERS_DIR, { withFileTypes: true });
+
+      const countByFilePathStmt = db.prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM posters
+        WHERE file_path = ?
+      `);
+
+      for (const entry of files) {
+        if (!entry.isFile()) continue;
+
+        const fileName = entry.name;
+
+        // On ne s'occupe que des fichiers d'images classiques
+        if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
+          continue;
+        }
+
+        let used = 0;
+        try {
+          const row = countByFilePathStmt.get(fileName);
+          used = row ? row.cnt : 0;
+        } catch (err) {
+          logError(
+            "POSTERS_CLEANUP",
+            `Erreur vérification utilisation fichier ${fileName}: ${err.message}`
+          );
+          continue;
+        }
+
+        if (used > 0) {
+          continue; // fichier encore référencé en DB
+        }
+
+        const absPath = path.join(POSTERS_DIR, fileName);
+
+        try {
+          fs.unlinkSync(absPath);
+          fsRemoved++;
+          logInfo(
+            "POSTERS_CLEANUP",
+            `Fichier d'affiche supprimé (orphelin FS): ${absPath}`
+          );
+        } catch (err) {
+          logError(
+            "POSTERS_CLEANUP",
+            `Erreur suppression fichier d'affiche (orphelin FS) ${absPath}: ${err.message}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    logError("POSTERS_CLEANUP", `Erreur phase 2 (FS orphelin): ${err.message}`);
+  }
+
+  logInfo(
+    "POSTERS_CLEANUP",
+    `Nettoyage orphelins terminé: ${dbRemoved} entrées DB supprimées, ${fsRemoved} fichiers supprimés`
+  );
+
+  return { dbRemoved, fsRemoved };
+}
+
 // ============================================================================
 // RSS PARSER
 // ============================================================================
@@ -232,7 +736,6 @@ function normalizeCategoryKey(raw) {
   return "film";
 }
 
-// mapping interne pour les IDs RSS
 const RSS_CATEGORY_IDS = {
   film: RSS_MOVIES_ID,
   series: RSS_SERIES_ID,
@@ -265,10 +768,8 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
 
   let t = rawTitle;
 
-  // on vire les crochets [ ... ]
   t = t.replace(/\[.*?\]/g, " ");
 
-  // séries : on coupe avant SxxExxx / Sxx
   if (kind === "series") {
     const seriesCutRegexes = [/\bS\d{1,2}E\d{1,3}\b/i, /\bS\d{1,2}\b/i];
     for (const re of seriesCutRegexes) {
@@ -592,7 +1093,6 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
 
   const catKey = normalizeCategoryKey(categoryRaw);
 
-  // les jeux passent par IGDB
   if (catKey === "games") {
     posterCache.set(cacheKey, null);
     return null;
@@ -680,16 +1180,43 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
       }));
   }
 
-  if (!poster) {
+  let finalPoster = poster;
+
+  if (poster) {
+    try {
+      const mediaType = kind === "series" ? "series" : "film";
+      const externalId =
+        extractImageKeyFromUrl(poster) || `${mediaType}_${cacheKey}`;
+
+      const localUrl = await ensureLocalPoster({
+        provider: "tmdb",
+        mediaType,
+        externalId,
+        remoteUrl: poster,
+      });
+
+      if (localUrl) {
+        finalPoster = localUrl;
+      }
+    } catch (e) {
+      logError(
+        "TMDB_POSTER",
+        `Erreur cache local poster pour "${rawTitle}" (${kind}): ${e.message}`
+      );
+    }
+  }
+
+  if (!finalPoster) {
     logWarn(
       "TMDB_NO_POSTER",
       `AUCUN POSTER | rawTitle="${rawTitle}" | query="${queryBase}" | year=${year != null ? year : "?"} | kind=${kind}`
     );
   }
 
-  posterCache.set(cacheKey, poster || null);
-  return poster || null;
+  posterCache.set(cacheKey, finalPoster || null);
+  return finalPoster || null;
 }
+
 
 // ============================================================================
 // IGDB HELPERS + CACHE (JEUX)
@@ -937,10 +1464,29 @@ async function syncCategory(catKey) {
         let poster = null;
 
         try {
+          let remotePoster = null;
+
+          // 1) On récupère l'URL distante (TMDB ou IGDB) comme avant
           if (normCat === "games") {
-            poster = await fetchIgdbCoverForTitle(rawTitle);
+            remotePoster = await fetchIgdbCoverForTitle(rawTitle);
           } else if (TMDB_API_KEY) {
-            poster = await fetchPosterForTitle(rawTitle, normCat);
+            remotePoster = await fetchPosterForTitle(rawTitle, normCat);
+          }
+
+          // 2) Si on a une URL distante, on force le cache local tout de suite
+          if (remotePoster) {
+            const cacheParams = buildPosterCacheParamsFromItem({
+              category: normCat,
+              poster: remotePoster,
+            });
+
+            if (cacheParams) {
+              const localUrl = await ensureLocalPoster(cacheParams);
+              // On stocke l'URL locale si dispo, sinon on retombe sur l'URL distante
+              poster = localUrl || remotePoster;
+            } else {
+              poster = remotePoster;
+            }
           }
         } catch (e) {
           const src = normCat === "games" ? "IGDB" : "TMDB";
@@ -989,11 +1535,86 @@ async function syncCategory(catKey) {
 }
 
 // ============================================================================
+// HELPERS POUR LES CLES D'AFFICHES LOCALES
+// ============================================================================
+
+function extractImageKeyFromUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const pathname = u.pathname || "";
+    const m = pathname.match(/\/([^\/]+)\.(jpg|jpeg|png|webp)$/i);
+    if (!m) return pathname || url;
+    return m[1];
+  } catch {
+    return url;
+  }
+}
+
+function buildPosterCacheParamsFromItem(item) {
+  if (!item || !item.poster) return null;
+
+  const remoteUrl = item.poster;
+  if (typeof remoteUrl !== "string" || !remoteUrl.trim()) return null;
+
+  if (/^\/posters\//.test(remoteUrl)) {
+    return null;
+  }
+
+  const category = item.category || "film";
+  const normCat = normalizeCategoryKey(category);
+
+  const provider = normCat === "games" ? "igdb" : "tmdb";
+  const mediaType = normCat;
+
+  const externalId = extractImageKeyFromUrl(remoteUrl);
+  if (!externalId) return null;
+
+  return {
+    provider,
+    mediaType,
+    externalId,
+    remoteUrl,
+  };
+}
+
+async function enrichItemsWithLocalPosters(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return items || [];
+  }
+
+  const tasks = items.map(async (item) => {
+    try {
+      const params = buildPosterCacheParamsFromItem(item);
+      if (!params) {
+        return item;
+      }
+
+      const localUrl = await ensureLocalPoster(params);
+      if (localUrl) {
+        item.posterUrl = localUrl;
+      } else {
+        item.posterUrl = item.poster || null;
+      }
+    } catch (err) {
+      logError(
+        "POSTERS",
+        `Erreur enrichItemsWithLocalPosters pour guid=${item.guid || "?"}: ${err.message}`
+      );
+      item.posterUrl = item.poster || null;
+    }
+    return item;
+  });
+
+  await Promise.all(tasks);
+  return items;
+}
+
+// ============================================================================
 // PURGE BDD (rétention)
 // ============================================================================
 
 function purgeOldItems(maxAgeDays) {
-  // maxAgeDays prioritaire si fourni, sinon on prend retentionDays
   const base = retentionDays;
   const daysRaw =
     typeof maxAgeDays === "number" && Number.isFinite(maxAgeDays) && maxAgeDays > 0
@@ -1001,18 +1622,28 @@ function purgeOldItems(maxAgeDays) {
       : base;
 
   const days =
-    Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DB_HISTORY_DAYS;
+    Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DEFAULT_RETENTION_DAYS;
 
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
-  const stmt = db.prepare(`
+  const selectToDeleteStmt = db.prepare(`
+    SELECT guid, category, poster
+    FROM items
+    WHERE added_at_ts IS NOT NULL
+      AND added_at_ts > 1000000000000
+      AND added_at_ts < ?
+  `);
+
+  const itemsToDelete = selectToDeleteStmt.all(cutoff) || [];
+
+  const deleteStmt = db.prepare(`
     DELETE FROM items
     WHERE added_at_ts IS NOT NULL
       AND added_at_ts > 1000000000000
       AND added_at_ts < ?
   `);
 
-  const info = stmt.run(cutoff);
+  const info = deleteStmt.run(cutoff);
   const deleted = info.changes || 0;
 
   logInfo(
@@ -1022,11 +1653,21 @@ function purgeOldItems(maxAgeDays) {
     ).toLocaleString("fr-FR")} | rétention = ${days} jours)`
   );
 
+  try {
+    if (itemsToDelete.length > 0) {
+      cleanupPostersAfterItemsPurge(itemsToDelete);
+    }
+  } catch (err) {
+    logError(
+      "POSTERS_PURGE",
+      `Erreur pendant cleanupPostersAfterItemsPurge: ${err.message}`
+    );
+  }
+
   return deleted;
 }
 
 async function syncAllCategories() {
-  // on se base sur CATEGORY_CONFIGS pour ne jamais oublier une catégorie
   const cats = CATEGORY_CONFIGS.map((c) => c.key);
 
   logInfo("SYNC", "Lancement de la synchronisation globale…");
@@ -1053,6 +1694,8 @@ async function syncAllCategories() {
 
   logInfo("SYNC", `Résumé: ${parts.join(", ")}`);
   logInfo("SYNC", "Synchronisation globale terminée.");
+
+  lastSyncAt = new Date().toISOString();
 
   return {
     summary,
@@ -1091,6 +1734,66 @@ app.delete("/api/favorites/:guid", (req, res) => {
   }
 });
 
+app.get("/api/status", (req, res) => {
+  res.json({
+    lastSyncAt,
+    isSyncRunning,
+    syncIntervalMinutes: currentSyncIntervalMinutes,
+  });
+});
+
+// ============================================================================
+// API CONFIG : intervalle de synchronisation
+// ============================================================================
+
+app.get("/api/config/sync-interval", (req, res) => {
+  res.json({
+    ok: true,
+    minutes: currentSyncIntervalMinutes,
+    isManual: !Number.isFinite(currentSyncIntervalMinutes) || currentSyncIntervalMinutes <= 0,
+    defaultMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
+  });
+});
+
+app.post("/api/config/sync-interval", (req, res) => {
+  // On accepte JSON { minutes: ... } ou ?minutes=
+  const raw =
+    (req.body && (req.body.minutes ?? req.body.value)) ??
+    req.query.minutes;
+
+  let minutes;
+
+  if (typeof raw === "string" && raw.toLowerCase() === "manual") {
+    minutes = 0; // 0 = mode manuel (pas de sync auto)
+  } else {
+    minutes = Number(raw);
+  }
+
+  if (!Number.isFinite(minutes)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Valeur minutes invalide",
+    });
+  }
+
+  // Persistance BDD
+  saveSyncIntervalToDb(minutes);
+
+  // Reprogrammation du scheduler
+  schedulePeriodicSync(minutes);
+
+  logInfo(
+    "SYNC_CFG",
+    `Intervalle de synchronisation mis à jour: ${minutes} minutes`
+  );
+
+  return res.json({
+    ok: true,
+    minutes,
+    isManual: minutes <= 0,
+  });
+});
+
 // ============================================================================
 // API RÉTENTION (durée de conservation en BDD)
 // ============================================================================
@@ -1099,12 +1802,15 @@ app.get("/api/retention", (req, res) => {
   res.json({
     ok: true,
     days: retentionDays,
-    defaultDays: DB_HISTORY_DAYS,
+    defaultDays: DEFAULT_RETENTION_DAYS,
   });
 });
 
 app.post("/api/retention", (req, res) => {
-  const raw = req.query.days;
+  const raw =
+    (req.body && (req.body.days ?? req.body.value)) ??
+    req.query.days;
+
   const newDays = Number(raw);
 
   if (!Number.isFinite(newDays) || newDays <= 0) {
@@ -1117,6 +1823,8 @@ app.post("/api/retention", (req, res) => {
   const oldDays = retentionDays;
   retentionDays = newDays;
 
+  saveRetentionDaysToDb(newDays);
+
   logInfo(
     "PURGE_CFG",
     `Durée de rétention mise à jour: ${oldDays} jours → ${newDays} jours`
@@ -1124,7 +1832,6 @@ app.post("/api/retention", (req, res) => {
 
   let purged = 0;
   try {
-    // On purge immédiatement selon la nouvelle rétention
     purged = purgeOldItems(newDays);
   } catch (e) {
     logError("PURGE_CFG", `Erreur purge après changement rétention: ${e.message}`);
@@ -1137,6 +1844,7 @@ app.post("/api/retention", (req, res) => {
     purged,
   });
 });
+
 
 // ============================================================================
 // SYNC API : empêcher plusieurs synchros en parallèle
@@ -1334,22 +2042,22 @@ app.get("/api/categories", (req, res) => {
 // API FEED (lecture BDD uniquement)
 // ============================================================================
 
-app.get("/api/feed", (req, res) => {
+app.get("/api/feed", async (req, res) => {
   try {
     const sort = (req.query.sort || "seeders").toLowerCase();
     const limitParam = (req.query.limit || "all").toLowerCase();
     const category = req.query.category || "film";
 
-    // Catégorie "Favoris"
     if (category === "favorites") {
-      const items = selectFavoritesFromDb(sort, limitParam);
+      let items = selectFavoritesFromDb(sort, limitParam);
+      items = await enrichItemsWithLocalPosters(items);
       return res.json({ items });
     }
 
-    // Catégorie "Tout" → regroupement par catégorie
     if (category === "all") {
-      const groups = CATEGORY_CONFIGS.map((cfg) => {
-        const items = selectItemsFromDb(cfg.key, sort, limitParam);
+      const groupsPromises = CATEGORY_CONFIGS.map(async (cfg) => {
+        let items = selectItemsFromDb(cfg.key, sort, limitParam);
+        items = await enrichItemsWithLocalPosters(items);
         return {
           key: cfg.key,
           label: cfg.label,
@@ -1357,11 +2065,13 @@ app.get("/api/feed", (req, res) => {
         };
       });
 
+      const groups = await Promise.all(groupsPromises);
       return res.json({ groups });
     }
 
     const normCat = normalizeCategoryKey(category);
-    const items = selectItemsFromDb(normCat, sort, limitParam);
+    let items = selectItemsFromDb(normCat, sort, limitParam);
+    items = await enrichItemsWithLocalPosters(items);
     res.json({ items });
   } catch (err) {
     console.error("API /api/feed error:", err);
@@ -1390,11 +2100,7 @@ app.get("/api/details", async (req, res) => {
     }
 
     const catKey = normalizeCategoryKey(category);
-
-    // type TMDB (movie / tv)
     const tmdbType = catKey === "series" ? "tv" : "movie";
-
-    // pour guessTitleAndYear on reste sur film/série
     const guessKind = catKey === "series" ? "series" : "film";
 
     const { cleanTitle, year } = guessTitleAndYear(rawTitle, guessKind);
@@ -1464,8 +2170,6 @@ app.get("/api/details", async (req, res) => {
     }
 
     const d = await detailsResp.json();
-
-    // Titre / année / dates
     const title = d.title || d.name || baseTitle;
     const released = d.release_date || d.first_air_date || "";
     const yearStr =
@@ -1473,7 +2177,6 @@ app.get("/api/details", async (req, res) => {
       (d.first_air_date && d.first_air_date.slice(0, 4)) ||
       "";
 
-    // Durée
     let runtime = null;
     if (typeof d.runtime === "number" && d.runtime > 0) {
       runtime = `${d.runtime} min`;
@@ -1485,13 +2188,11 @@ app.get("/api/details", async (req, res) => {
       runtime = `${d.episode_run_time[0]} min / épisode`;
     }
 
-    // Genres
     const genre =
       Array.isArray(d.genres) && d.genres.length
         ? d.genres.map((g) => g.name).join(", ")
         : null;
 
-    // Réalisateur / créateur
     let director = null;
     if (d.credits && Array.isArray(d.credits.crew)) {
       const directors = d.credits.crew.filter((p) => p.job === "Director");
@@ -1503,7 +2204,6 @@ app.get("/api/details", async (req, res) => {
       director = d.created_by.map((p) => p.name).join(", ");
     }
 
-    // Acteurs principaux
     let actors = null;
     if (d.credits && Array.isArray(d.credits.cast) && d.credits.cast.length) {
       actors = d.credits.cast
@@ -1512,25 +2212,20 @@ app.get("/api/details", async (req, res) => {
         .join(", ");
     }
 
-    // Langues parlées
     const language =
       Array.isArray(d.spoken_languages) && d.spoken_languages.length
         ? d.spoken_languages.map((l) => l.name || l.english_name).join(", ")
         : null;
 
-    // Pays de production
     const country =
       Array.isArray(d.production_countries) && d.production_countries.length
         ? d.production_countries.map((c) => c.name).join(", ")
         : null;
 
-    // Tagline comme "awards"
     const awards = d.tagline || null;
 
-    // Poster
     const poster = d.poster_path ? `${TMDB_IMG_BASE}${d.poster_path}` : null;
 
-    // Note / votes TMDB → on les mappe sur les champs IMDb pour ne pas changer le front
     const imdbRating =
       typeof d.vote_average === "number" && d.vote_average > 0
         ? d.vote_average.toFixed(1)
@@ -1540,7 +2235,6 @@ app.get("/api/details", async (req, res) => {
         ? d.vote_count.toLocaleString("fr-FR")
         : null;
 
-    // ID IMDb (si dispo) pour le lien
     const imdbID =
       d.external_ids && d.external_ids.imdb_id
         ? d.external_ids.imdb_id
@@ -1575,6 +2269,26 @@ app.get("/api/details", async (req, res) => {
 });
 
 // ============================================================================
+// API ADMIN : NETTOYAGE DES AFFICHES ORPHELINES
+// ============================================================================
+
+app.post("/api/admin/posters/cleanup-orphans", (req, res) => {
+  try {
+    const result = cleanupPosterOrphans();
+    return res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (err) {
+    logError("POSTERS_CLEANUP", `Erreur API cleanup-orphans: ${err.message}`);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur pendant le nettoyage des affiches orphelines",
+    });
+  }
+});
+
+// ============================================================================
 // LANCEMENT SERVEUR + SYNC PÉRIODIQUE
 // ============================================================================
 
@@ -1583,24 +2297,14 @@ app.listen(PORT, () => {
   logInfo("SERVER", `Base SQLite : ${DB_PATH}`);
   logInfo("SERVER", `Fichier de logs : ${LOG_FILE}`);
 
-  // Sync initial au démarrage
+  const initialInterval = loadSyncIntervalFromDb();
+  schedulePeriodicSync(initialInterval);
+
+  retentionDays = loadRetentionDaysFromDb();
+  logInfo("PURGE_CFG", `Durée de rétention active: ${retentionDays} jours`);
+
   syncAllCategories().catch((e) =>
     logError("SYNC_INIT", `Erreur: ${e.message}`)
   );
-
-  // Sync périodique si configuré
-  if (SYNC_INTERVAL_MINUTES > 0) {
-    const ms = SYNC_INTERVAL_MINUTES * 60 * 1000;
-    logInfo(
-      "SYNC",
-      `Programmation: toutes les ${SYNC_INTERVAL_MINUTES} minutes`
-    );
-    setInterval(() => {
-      syncAllCategories().catch((e) =>
-        logError("SYNC_PERIODIC", `Erreur: ${e.message}`)
-      );
-    }, ms);
-  } else {
-    logWarn("SYNC", "SYNC_INTERVAL_MINUTES <= 0 → pas de sync automatique");
-  }
 });
+

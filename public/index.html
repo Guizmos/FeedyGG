@@ -302,6 +302,10 @@
               </select>
             </div>
           </div>
+          <div class="last-sync-row">
+            <span class="last-sync-label">Date de la dernière synchronisation :</span>
+            <span id="last-sync-value" class="last-sync-date">inconnue</span>
+          </div>
         </section>
 
         <section class="settings-section" data-section="logs">
@@ -356,7 +360,30 @@
           <p class="settings-warning" style="color:#ef4444; margin-top: 12px; font-size: 13px">
             ⚠️ Réduire la durée de rétention peut supprimer immédiatement des éléments plus anciens.
           </p>
+
+          <!-- 🔽 Nouveau bloc : nettoyage des affiches orphelines -->
+          <div class="settings-row settings-row-danger">
+            <div class="settings-row-main">
+              <span class="settings-icon settings-icon-danger material-symbols-rounded">
+                image_not_supported
+              </span>
+              <div class="settings-text">
+                <span class="settings-label">Nettoyage des affiches</span>
+                <div class="settings-subtitle">
+                  Supprime les fichiers d'affiches qui ne sont plus liés à aucun élément.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <button id="cleanup-posters-btn" class="btn-clean-posters">
+                Nettoyer les affiches
+              </button>
+            </div>
+          </div>
+
+          <p id="cleanup-posters-status" class="settings-hint"></p>
         </section>
+
 
       </div>
     </div>

@@ -591,15 +591,17 @@ body {
   align-items: center;
   gap: 8px;
 
-  padding: 4px 10px;
-  min-height: var(--filters-pill-height);
+  padding: 0 14px;
+  height: var(--filters-pill-height);
   border-radius: 999px;
 
   background: rgba(9, 9, 20, 0.92);
-  border: var(--border-subtle);
+  border: 1px solid rgba(148, 163, 253, 0.35);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.45);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55);
+
+  white-space: nowrap;
 }
 
 .theme-light .date-filter-inner {
@@ -1504,6 +1506,20 @@ body.cards-size-large .btn {
   color: #ffffff;
 }
 
+.last-sync-row {
+  margin-top: 150px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.last-sync-date {
+  font-weight: 600;
+  color: var(--text);
+}
+
 .card-fav-btn {
   width: 22px;
   height: 22px;
@@ -1619,6 +1635,58 @@ body.cards-size-large .btn {
   justify-content: flex-end;
 }
 
+.settings-row-danger {
+  border-radius: 12px;
+}
+
+.settings-row-danger:hover {
+  background: rgba(127, 29, 29, 0.25);
+  border-color: rgba(248, 113, 113, 0.8);
+}
+
+.settings-icon-danger {
+  color: #f97373;
+}
+
+.btn-clean-posters {
+  background: transparent;
+  color: #fecaca;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  border: 1px solid rgba(248, 113, 113, 0.9);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.btn-clean-posters:hover {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fee2e2;
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.9),
+              0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.settings-hint {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.theme-light .settings-row-danger:hover {
+  background: rgba(254, 242, 242, 0.95);
+  border-color: rgba(248, 113, 113, 0.9);
+}
+
+.theme-light .btn-clean-posters {
+  color: #b91c1c;
+  border-color: rgba(248, 113, 113, 0.9);
+}
+
+.theme-light .btn-clean-posters:hover {
+  background: rgba(254, 226, 226, 0.95);
+  color: #7f1d1d;
+  box-shadow: 0 4px 10px rgba(248, 113, 113, 0.45);
+}
 
 .btn-logs {
   background: transparent;
@@ -2054,6 +2122,67 @@ body.no-scroll {
 /* RESPONSIVE                                                             */
 /* ====================================================================== */
 @media (max-width: 768px) {
+
+  .header-actions-group {
+    padding: 5px 7px;
+  }
+  .stats .stats-chip:nth-child(1),
+  .stats .stats-chip:nth-child(2) {
+    display: none;
+  }
+
+  .stats {
+    gap: 8px;
+  }
+
+  .stats-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .date-filter-panel {
+    position: static;
+    top: auto;
+    right: auto;
+    transform: none;
+    margin-left: 0;
+    flex: 0 1 auto;
+  }
+
+  .stats-bar:has(.date-filter-panel:not(.hidden)) .date-filter-chip {
+    display: none;
+  }
+
+  .date-filter-btn,
+  .sort-direction-btn {
+    flex: 0 0 var(--filters-pill-height);
+    margin-left: 6px;
+  }
+
+  .date-filter-btn {
+    margin-left: auto;
+  }
+
+  .date-filter-inner {
+    background: rgba(9, 9, 20, 0.92) !important;
+    border: 1px solid rgba(148, 163, 253, 0.35) !important;
+    border-radius: 999px !important;
+    backdrop-filter: blur(14px) !important;
+    -webkit-backdrop-filter: blur(14px) !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55) !important;
+
+    padding: 4px 12px; 
+    display: flex;
+    gap: 8px;
+    white-space: nowrap !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .date-filter-pill {
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+  }
+
   .settings-modal {
     width: calc(100% - 16px);
     padding: 16px 14px 14px;
@@ -2377,6 +2506,16 @@ body.no-scroll {
     transform: scale(1.5);
     transform-origin: left center;
   }
+
+  .date-filter-panel {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+
+    /* Décalage à gauche : à ajuster selon ton rendu */
+    right: calc(var(--filters-pill-height) * 2.5 + 10px) !important;
+    /* avant : right: calc(var(--filters-pill-height) + 10px) */
+  }
 }
 
 @media (max-width: 1300px) {
@@ -2397,5 +2536,15 @@ body.no-scroll {
 
   .cards-grid {
     gap: 12px;
+  }
+
+  .date-filter-panel {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+
+    /* Décalage à gauche : à ajuster selon ton rendu */
+    right: calc(var(--filters-pill-height) * 2.5 + 10px) !important;
+    /* avant : right: calc(var(--filters-pill-height) + 10px) */
   }
 }
