@@ -335,12 +335,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const hadCardsBefore = !!resultsEl.querySelector(".card");
 
     if (!hadCardsBefore) {
-      // Premier chargement : on garde le loader classique
-      resultsEl.innerHTML = "";
-      loadingEl.classList.remove("hidden");
+      // Premier chargement / F5 → on affiche direct le skeleton
+      if (loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
+      renderSkeletonCards();
     } else {
-      // Refresh / tri / changement de filtre : on passe les cartes en skeleton
-      loadingEl.classList.add("hidden");
+      // Refresh / tri / filtre → skeleton sur les cartes existantes
+      if (loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
       const cards = resultsEl.querySelectorAll(".card");
       cards.forEach((card) => card.classList.add("card--loading"));
     }
@@ -365,6 +369,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const res = await fetch(`/api/feed?${params.toString()}`);
+
       if (!res.ok) throw new Error("Erreur API");
       const data = await res.json();
 
@@ -1302,6 +1307,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function openLogs() {
     if (!logsOverlay || !logsModal) return;
+
+    // On masque le modal des paramètres derrière
+    if (modal) {
+      modal.classList.add("settings-modal-behind-logs");
+    }
+
     logsOverlay.classList.remove("hidden");
     logsModal.classList.remove("hidden");
     requestAnimationFrame(() => logsModal.classList.add("show"));
@@ -1311,11 +1322,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function closeLogs() {
     if (!logsOverlay || !logsModal) return;
+
     logsModal.classList.remove("show");
     setTimeout(() => {
       logsOverlay.classList.add("hidden");
       logsModal.classList.add("hidden");
       document.body.classList.remove("no-scroll");
+
+      // On ré-affiche le modal des paramètres une fois les logs fermés
+      if (modal) {
+        modal.classList.remove("settings-modal-behind-logs");
+      }
     }, 200);
   }
 

@@ -1061,6 +1061,11 @@ body {
   }
 }
 
+.card--skeleton,
+.card--loading {
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+}
+
 body:not(.theme-light) .card--loading {
   background: radial-gradient(
                circle at top left,
@@ -1846,6 +1851,12 @@ body.cards-size-large .btn {
   max-width: 1200px;
   width: 100%;
   max-height: 80vh;
+}
+
+.settings-modal.settings-modal-behind-logs {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 .logs-content {

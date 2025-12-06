@@ -1063,6 +1063,8 @@ async function tmdbSearch(pathUrl, params) {
     }
   });
 
+  logInfo("TMDB_CALL", `Search ${pathUrl} → ${url.toString()}`);
+
   try {
     const resp = await fetch(url.toString());
     if (!resp.ok) {
@@ -1278,6 +1280,8 @@ async function igdbSearchGame(title) {
     "fields name, cover.image_id, first_release_date;",
     "limit 10;",
   ].join(" ");
+
+  logInfo("IGDB_CALL", `Search "${safeTitle}"`);
 
   try {
     const resp = await fetch(`${IGDB_BASE_URL}/games`, {
