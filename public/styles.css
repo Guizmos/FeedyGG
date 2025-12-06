@@ -933,6 +933,13 @@ body {
   padding-right: 26px;
 }
 
+.card,
+.card--skeleton,
+.card--loading {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
 .card-category {
   position: absolute;
   top: 10px;
@@ -1050,6 +1057,7 @@ body {
     rgba(255, 255, 255, 0.22) 60%,
     transparent 100%
   );
+  border-radius: inherit; 
   transform: translateX(-100%);
   animation: card-skeleton-shimmer 1s linear infinite;
   mix-blend-mode: soft-light;
