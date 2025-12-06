@@ -1063,7 +1063,12 @@ body {
 
 .card--skeleton,
 .card--loading {
-  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.card--loading::after {
+  border-radius: inherit;
 }
 
 body:not(.theme-light) .card--loading {
