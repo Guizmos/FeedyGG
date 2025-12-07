@@ -1442,6 +1442,8 @@ body.cards-size-large .btn {
 
   width: min(860px, calc(100% - 32px));
   max-width: 100%;
+  max-height: 80vh;
+  overflow: hidden;
 
   display: flex;
   flex-direction: column;
@@ -1499,10 +1501,12 @@ body.cards-size-large .btn {
   align-items: stretch;
   gap: 18px;
   min-height: 260px;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-sidebar {
-  flex: 0 0 230px;
+  flex: 0 0 200px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1585,12 +1589,16 @@ body.cards-size-large .btn {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
+
 
 .settings-section {
   display: none;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
 }
 
 .settings-section.active {
@@ -1648,8 +1656,121 @@ body.cards-size-large .btn {
   color: #ffffff;
 }
 
+/* Overlay édition titre */
+.edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+/* Modal plus compact */
+.edit-modal {
+  background: var(--bg-soft);
+  border-radius: 24px;
+  box-shadow: var(--shadow-soft);
+  padding: 20px 24px 18px;
+  max-width: 520px;     /* <-- plus petit que ton gros modal plein écran */
+  width: 100%;
+  color: var(--text);
+}
+
+.theme-light .edit-modal {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+/* Titre du modal */
+.edit-modal-title {
+  margin: 0 0 16px;
+  font-size: 1.3rem;
+}
+
+/* Corps : pile les champs avec un peu d'air */
+.edit-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edit-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Ligne du titre original, bien lisible */
+.edit-original {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Input */
+.edit-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--text);
+  font: inherit;
+}
+
+.theme-light .edit-input {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
+/* Footer + boutons */
+.edit-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Si tu as déjà .btn ailleurs, tu peux garder,
+   mais au cas où : */
+.btn {
+  border-radius: 999px;
+  padding: 6px 16px;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Secondaire = type "Annuler" */
+.btn-secondary {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text);
+}
+
+/* Primaire = "Enregistrer" */
+.btn-primary {
+  background: var(--accent);
+  color: #0b1120;
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05);
+}
+
 .last-sync-row {
-  margin-top: 150px;
+  margin-top: 10px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1710,6 +1831,97 @@ body.cards-size-large .btn {
   color: var(--accent);
 }
 
+.card-menu-wrapper {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+/* Bouton 3 points */
+.card-menu-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0;
+
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.45);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.card-menu-btn .material-symbols-rounded {
+  font-size: 18px;
+  line-height: 1;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+.card-menu-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.theme-light .card-menu-btn {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 10px 26px rgba(148, 163, 184, 0.35);
+}
+
+.theme-light .card-menu-btn .material-symbols-rounded {
+  color: #9ca3af;
+}
+
+/* Menu déroulant */
+.card-menu {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  min-width: 170px;
+  padding: 6px;
+
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 253, 0.35);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.75);
+
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 5;
+}
+
+.card-menu-item {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-menu-item:hover {
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--accent);
+}
+
+.theme-light .card-menu {
+  background: #ffffff;
+  border-color: rgba(148, 163, 184, 0.5);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+}
+
+.theme-light .card-menu-item:hover {
+  background: rgba(226, 232, 240, 0.75);
+}
+
 .settings-icon {
   width: 28px;
   height: 28px;
@@ -1749,7 +1961,8 @@ body.cards-size-large .btn {
 }
 
 .settings-modal .pill-select,
-.settings-modal .btn-logs {
+.settings-modal .btn-logs,
+.settings-modal .btn-clean-posters {
   width: 130px;
   min-width: 130px;
   min-height: 34px;
@@ -1975,6 +2188,27 @@ body.cards-size-large .btn {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  min-height: 0;
+}
+
+.details-scroll {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.details-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.details-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.details-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .details-title {
@@ -2069,7 +2303,9 @@ body.cards-size-large .btn {
 }
 
 .details-footer {
-  margin-top: 8px;
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .card-actions .btn-details {
@@ -2286,6 +2522,107 @@ button:focus {
   display: block;
 }
 
+/* Wrapper du select amélioré */
+.pill-select-enhanced {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Le vrai select natif : présent pour la logique, invisible pour l'utilisateur */
+.pill-select-native {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+/* Le bouton qui remplace visuellement le select natif */
+.pill-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-right: 28px !important;
+}
+
+.pill-select-trigger-label {
+  white-space: nowrap;
+}
+
+/* petite icône de flèche (on garde Material Symbols) */
+.pill-select-trigger-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Menu déroulant custom, style proche du menu 3 points */
+.pill-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  padding: 6px;
+  border-radius: 12px;
+
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 253, 0.35);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.75);
+
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 20;
+}
+
+/* Items du menu */
+.pill-select-menu-item {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pill-select-menu-item:hover {
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--accent);
+}
+
+.pill-select-menu-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pill-select-trigger-label {
+  text-align: center;
+  width: 100%;
+}
+
+.pill-select-trigger {
+  padding-right: 18px !important;
+  padding-left: 18px !important;
+}
+
+.theme-light .pill-select-menu {
+  background: #ffffff;
+  border-color: rgba(148, 163, 184, 0.5);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+}
+
+.theme-light .pill-select-menu-item:hover {
+  background: rgba(226, 232, 240, 0.75);
+}
+
+.theme-light .pill-select-menu-item.active {
+  background: rgba(191, 219, 254, 0.9);
+  color: #0f172a;
+}
+
 /* ====================================================================== */
 /* FOOTER                                                                 */
 /* ====================================================================== */
@@ -2363,103 +2700,8 @@ body.no-scroll {
 /* ====================================================================== */
 /* RESPONSIVE                                                             */
 /* ====================================================================== */
-@media (max-width: 768px) {
-
-  .header-actions-group {
-    padding: 5px 7px;
-  }
-  .stats .stats-chip:nth-child(1),
-  .stats .stats-chip:nth-child(2) {
-    display: none;
-  }
-
-  .stats {
-    gap: 8px;
-  }
-
-  .stats-bar {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .date-filter-panel {
-    position: static;
-    top: auto;
-    right: auto;
-    transform: none;
-    margin-left: 0;
-    flex: 0 1 auto;
-  }
-
-  .stats-bar:has(.date-filter-panel:not(.hidden)) .date-filter-chip {
-    display: none;
-  }
-
-  .date-filter-btn,
-  .sort-direction-btn {
-    flex: 0 0 var(--filters-pill-height);
-    margin-left: 6px;
-  }
-
-  .date-filter-btn {
-    margin-left: auto;
-  }
-
-  .date-filter-inner {
-    background: rgba(9, 9, 20, 0.92) !important;
-    border: 1px solid rgba(148, 163, 253, 0.35) !important;
-    border-radius: 999px !important;
-    backdrop-filter: blur(14px) !important;
-    -webkit-backdrop-filter: blur(14px) !important;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55) !important;
-
-    padding: 4px 12px; 
-    display: flex;
-    gap: 8px;
-    white-space: nowrap !important;
-    flex-wrap: nowrap !important;
-  }
-
-  .date-filter-pill {
-    white-space: nowrap !important;
-    flex: 0 0 auto !important;
-  }
-
-  .settings-modal {
-    width: calc(100% - 16px);
-    padding: 16px 14px 14px;
-  }
-
-  .settings-layout {
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .settings-sidebar {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
-    border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 253, 0.18);
-    padding: 2px 0 6px;
-  }
-
-  .theme-light .settings-sidebar {
-    border-bottom-color: rgba(148, 163, 184, 0.35);
-  }
-
-  .settings-nav-item {
-    flex: 1 1 48%;
-    padding: 6px 8px;
-  }
-
-  .settings-section .settings-row {
-    padding-inline: 0;
-  }
-}
 
 @media (max-width: 380px) {
-
   .card {
     flex-direction: column;
     align-items: center;
@@ -2532,6 +2774,13 @@ body.no-scroll {
 
   .card .btn-download {
     display: inline-flex;
+  }
+}
+
+@media (max-width: 640px) {
+  .edit-modal {
+    margin: 0 16px;
+    padding: 18px 16px 16px;
   }
 }
 
@@ -2741,9 +2990,194 @@ body.no-scroll {
     font-size: 1.15rem;
     text-align: left;
   }
+
+  .header-actions-group {
+    padding: 5px 7px;
+  }
+  
+  .stats .stats-chip:nth-child(1),
+  .stats .stats-chip:nth-child(2) {
+    display: none;
+  }
+
+  .stats {
+    gap: 8px;
+  }
+
+  .stats-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .date-filter-panel {
+    position: static;
+    top: auto;
+    right: auto;
+    transform: none;
+    margin-left: 0;
+    flex: 0 1 auto;
+  }
+
+  .stats-bar:has(.date-filter-panel:not(.hidden)) .date-filter-chip {
+    display: none;
+  }
+
+  .date-filter-btn,
+  .sort-direction-btn {
+    flex: 0 0 var(--filters-pill-height);
+    margin-left: 6px;
+  }
+
+  .date-filter-btn {
+    margin-left: auto;
+  }
+
+  .date-filter-inner {
+    background: rgba(9, 9, 20, 0.92) !important;
+    border: 1px solid rgba(148, 163, 253, 0.35) !important;
+    border-radius: 999px !important;
+    backdrop-filter: blur(14px) !important;
+    -webkit-backdrop-filter: blur(14px) !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.55) !important;
+
+    padding: 4px 12px; 
+    display: flex;
+    gap: 8px;
+    white-space: nowrap !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .date-filter-pill {
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+  }
+
+  .settings-modal {
+    width: calc(100% - 16px);
+    padding: 16px 14px 14px;
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .settings-layout {
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .settings-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  
+  .settings-sidebar {
+    flex: 0 0 auto !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    column-gap: 1px;
+    row-gap: 3px;
+    padding: 4px 0 1px;
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 253, 0.18);
+    align-content: flex-start;
+  }
+
+  .settings-nav-item {
+    flex: 1 1 calc(50% - 6px);
+    padding: 4px 8px;
+    height: 40px;
+    min-height: 40px;
+    border-radius: 14px;
+    gap: 6px;
+  }
+
+  .settings-section {
+    font-size: 14px;
+  }
+
+  .settings-section-title {
+    font-size: 15px !important;
+  }
+
+  .settings-subtitle,
+  .settings-row .settings-label {
+    font-size: 12.5px !important;
+  }
+
+  .settings-row {
+    padding: 6px 0;
+  }
+
+  .details-scroll {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .settings-modal.details-modal {
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+  
+  .pill-select {
+    font-size: 14px !important;
+    padding: 5px 14px !important;
+  }
+
+  .pill-select-enhanced {
+    position: static;
+  }
+
+  .pill-select-enhanced .pill-select-native {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    width: 100%;
+    height: auto;
+  }
+
+  .pill-select-enhanced .pill-select-trigger,
+  .pill-select-enhanced .pill-select-menu {
+    display: none !important;
+  }
+
+  .settings-nav-sub {
+    display: none !important;
+  }
+
+  .settings-nav-icon {
+    font-size: 18px !important;
+  }
+
+  .settings-nav-label {
+    font-size: 13px !important;
+  }
+
+  .settings-section .settings-row {
+    padding-inline: 0;
+  }
+
+  .theme-light .settings-sidebar {
+    border-bottom-color: rgba(148, 163, 184, 0.35);
+  }
 }
 
 @media (min-width: 769px) {
+  .settings-modal {
+    height: 60vh;
+    max-height: 80vh;
+  }
+
+
+  .settings-modal.details-modal {
+    height: auto;
+    max-height: 80vh;
+    overflow: visible;
+  }
+
   .logo {
     transform: scale(1.5);
     transform-origin: left center;
@@ -2753,12 +3187,10 @@ body.no-scroll {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-
-    /* Décalage à gauche : à ajuster selon ton rendu */
     right: calc(var(--filters-pill-height) * 2.5 + 10px) !important;
-    /* avant : right: calc(var(--filters-pill-height) + 10px) */
   }
 }
+
 
 @media (max-width: 1300px) {
   body {

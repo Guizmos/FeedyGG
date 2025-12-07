@@ -374,14 +374,27 @@
             </div>
             <div class="settings-center">
               <button id="cleanup-posters-btn" class="btn-clean-posters">
-                Nettoyer les affiches
+                Nettoyer
               </button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">photo_library</span>
+              <div class="settings-text">
+                <span class="settings-label">Affiches en cache</span>
+                <div class="settings-subtitle">
+                  Nombre de fichiers d'affiches présents en local.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <span id="posters-count" class="settings-label">—</span>
             </div>
           </div>
 
           <p id="cleanup-posters-status" class="settings-hint"></p>
         </section>
-
 
       </div>
     </div>
@@ -429,22 +442,59 @@
 
         <div id="details-meta" class="details-meta"></div>
 
-        <p id="details-plot" class="details-plot"></p>
-        <div id="details-extra" class="details-extra"></div>
+        <div class="details-scroll">
+          <p id="details-plot" class="details-plot"></p>
+          <div id="details-extra" class="details-extra"></div>
 
-        <a
-          id="details-imdb-link"
-          class="details-imdb-link hidden"
-          href="#"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-        </a>
+          <a
+            id="details-imdb-link"
+            class="details-imdb-link hidden"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Voir la fiche sur IMDb
+          </a>
+        </div>
       </div>
+
     </div>
 
     <div class="settings-footer details-footer">
       <button id="details-close" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <div id="edit-overlay" class="edit-overlay hidden">
+    <div id="edit-modal" class="edit-modal">
+      <h2 class="edit-modal-title">Modifier le titre</h2>
+
+      <div class="edit-modal-body">
+        <!-- 1. Titre original en premier -->
+        <div class="edit-field">
+          <div class="edit-label">Titre original</div>
+          <div id="edit-original-title" class="edit-original"></div>
+        </div>
+
+        <!-- 2. Titre affiché / modifiable -->
+        <div class="edit-field">
+          <label class="edit-label" for="edit-title-input">Titre affiché</label>
+          <input
+            id="edit-title-input"
+            type="text"
+            class="edit-input"
+          />
+        </div>
+      </div>
+
+      <div class="edit-modal-footer">
+        <button id="edit-cancel-btn" class="btn btn-secondary">
+          Annuler
+        </button>
+        <button id="edit-save-btn" class="btn btn-primary">
+          Enregistrer
+        </button>
+      </div>
     </div>
   </div>
 

@@ -454,6 +454,102 @@ document.addEventListener("DOMContentLoaded", () => {
     return t || source;
   }
 
+  function closeAllCardMenus() {
+    document.querySelectorAll(".card-menu").forEach((menu) => {
+      if (!menu.classList.contains("hidden")) {
+        menu.classList.add("hidden");
+      }
+    });
+  }
+
+  function closeAllCustomSelects() {
+    document.querySelectorAll(".pill-select-menu").forEach((menu) => {
+      if (!menu.classList.contains("hidden")) {
+        menu.classList.add("hidden");
+      }
+    });
+  }
+
+  function enhancePillSelect(nativeSelect) {
+    // wrapper qui englobe le select + le faux bouton
+    const wrapper = document.createElement("div");
+    wrapper.className = "pill-select-enhanced";
+
+    const parent = nativeSelect.parentNode;
+    parent.insertBefore(wrapper, nativeSelect);
+    wrapper.appendChild(nativeSelect);
+
+    nativeSelect.classList.add("pill-select-native");
+
+    // Bouton visible (on lui laisse la classe .pill-select pour récupérer ton style)
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "pill-select pill-select-trigger";
+
+    trigger.innerHTML = `
+      <span class="pill-select-trigger-label"></span>
+      <span class="material-symbols-rounded pill-select-trigger-icon">expand_more</span>
+    `.trim();
+
+    const labelSpan = trigger.querySelector(".pill-select-trigger-label");
+
+    const updateLabel = () => {
+      const opt = nativeSelect.options[nativeSelect.selectedIndex];
+      labelSpan.textContent = opt ? opt.textContent : "";
+    };
+    updateLabel();
+
+    // Menu custom
+    const menu = document.createElement("div");
+    menu.className = "pill-select-menu hidden";
+
+    Array.from(nativeSelect.options).forEach((opt) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "pill-select-menu-item";
+      item.textContent = opt.textContent;
+      item.dataset.value = opt.value;
+
+      if (opt.disabled) {
+        item.disabled = true;
+      }
+
+      if (opt.selected) {
+        item.classList.add("active");
+      }
+
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+
+        nativeSelect.value = opt.value;
+        // On déclenche l'évènement change pour ne **rien casser** dans ton code
+        nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+
+        // maj label + état actif
+        updateLabel();
+        menu.querySelectorAll(".pill-select-menu-item").forEach((btn) => {
+          btn.classList.toggle("active", btn === item);
+        });
+
+        menu.classList.add("hidden");
+      });
+
+      menu.appendChild(item);
+    });
+
+    trigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasHidden = menu.classList.contains("hidden");
+      closeAllCardMenus();
+      closeAllCustomSelects();
+      if (wasHidden) {
+        menu.classList.remove("hidden");
+      }
+    });
+
+    wrapper.append(trigger, menu);
+  }
+
   function createCard(item) {
     const card = document.createElement("div");
     card.className = "card";
@@ -511,36 +607,75 @@ document.addEventListener("DOMContentLoaded", () => {
     const guid = item.guid;
 
     if (guid) {
-      const favBtn = document.createElement("button");
-      favBtn.type = "button";
-      favBtn.className = "info-btn card-fav-btn";
+      const menuWrapper = document.createElement("div");
+      menuWrapper.className = "card-menu-wrapper";
 
-      const favIcon = document.createElement("span");
-      favIcon.className = "material-symbols-rounded";
+      const menuBtn = document.createElement("button");
+      menuBtn.type = "button";
+      menuBtn.className = "card-menu-btn";
+      menuBtn.innerHTML = `
+        <span class="material-symbols-rounded">more_vert</span>
+      `.trim();
 
+      const menu = document.createElement("div");
+      menu.className = "card-menu hidden";
+
+      // --- Ajouter / retirer des favoris ---
       const initiallyFav = item.isFavorite || isFavorite(guid);
-      favIcon.textContent = initiallyFav ? "star" : "star_border";
-      if (initiallyFav) {
-        favBtn.classList.add("card-fav-btn--active");
-      }
 
-      favBtn.appendChild(favIcon);
+      const menuFav = document.createElement("button");
+      menuFav.type = "button";
+      menuFav.className = "card-menu-item";
+      menuFav.textContent = initiallyFav
+        ? "Retirer des favoris"
+        : "Ajouter aux favoris";
 
-      favBtn.addEventListener("click", async (e) => {
+      menuFav.addEventListener("click", async (e) => {
         e.stopPropagation();
-
         if (isFavorite(guid)) {
           await removeFavorite(guid);
-          favBtn.classList.remove("card-fav-btn--active");
-          favIcon.textContent = "star_border";
+          menuFav.textContent = "Ajouter aux favoris";
         } else {
           await addFavorite(guid);
-          favBtn.classList.add("card-fav-btn--active");
-          favIcon.textContent = "star";
+          menuFav.textContent = "Retirer des favoris";
+        }
+        closeAllCardMenus();
+      });
+
+      // --- Éditer ---
+      const menuEdit = document.createElement("button");
+      menuEdit.type = "button";
+      menuEdit.className = "card-menu-item";
+      menuEdit.textContent = "Éditer";
+      menuEdit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openEditModal(item);
+        closeAllCardMenus();
+      });
+
+      // --- Rafraîchir la pochette ---
+      const menuRefresh = document.createElement("button");
+      menuRefresh.type = "button";
+      menuRefresh.className = "card-menu-item";
+      menuRefresh.textContent = "Rafraîchir la pochette";
+      menuRefresh.addEventListener("click", (e) => {
+        e.stopPropagation();
+        refreshPosterForItem(item, menuRefresh);
+      });
+
+      menu.append(menuFav, menuEdit, menuRefresh);
+
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const wasHidden = menu.classList.contains("hidden");
+        closeAllCardMenus();
+        if (wasHidden) {
+          menu.classList.remove("hidden");
         }
       });
 
-      titleRow.appendChild(favBtn);
+      menuWrapper.append(menuBtn, menu);
+      titleRow.appendChild(menuWrapper);
     }
 
     body.append(titleRow);
@@ -731,6 +866,162 @@ document.addEventListener("DOMContentLoaded", () => {
       renderItems([]);
     }
   }
+
+  async function refreshPostersCount() {
+    const el = document.getElementById("posters-count");
+    if (!el) return;
+
+    try {
+      const res = await fetch("/api/posters/stats");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      const total = typeof data.total === "number" ? data.total : 0;
+      el.textContent = total > 0
+        ? `${total.toLocaleString("fr-FR")} image${total > 1 ? "s" : ""}`
+        : "Aucune image";
+    } catch (err) {
+      console.error("Erreur lors du chargement du nombre d'affiches :", err);
+      el.textContent = "inconnue";
+    }
+  }
+
+  async function refreshPosterForItem(item, buttonEl) {
+    if (!item || !item.guid) return;
+
+    const guid = item.guid;
+    const encoded = encodeURIComponent(guid);
+
+    const oldText = buttonEl.textContent;
+    buttonEl.disabled = true;
+    buttonEl.textContent = "Rafraîchissement…";
+
+    try {
+      const res = await fetch(`/api/posters/refresh/${encoded}`, {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        throw new Error("HTTP " + res.status);
+      }
+
+      await loadFeed({ useMinSkeleton: false });
+    } catch (err) {
+      console.error("Erreur refreshPosterForItem:", err);
+      alert("Impossible de rafraîchir la pochette pour le moment.");
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = oldText;
+    }
+  }
+
+  let editCurrentItem = null;
+
+  function openEditModal(item) {
+    const overlay = document.getElementById("edit-overlay");
+    const modal = document.getElementById("edit-modal");
+    const input = document.getElementById("edit-title-input");
+    const originalEl = document.getElementById("edit-original-title");
+
+    if (!overlay || !modal || !input || !originalEl) return;
+
+    const displayTitle = getDisplayTitle(item);
+    const rawTitle = item.rawTitle || item.title || "";
+
+    input.value = displayTitle;
+    originalEl.textContent = rawTitle;
+
+    overlay.classList.remove("hidden");
+    modal.classList.add("show");
+    document.body.classList.add("no-scroll");
+
+    input.focus();
+    input.select();
+
+    const cancelBtn = document.getElementById("edit-cancel-btn");
+    const saveBtn = document.getElementById("edit-save-btn");
+
+    cancelBtn.onclick = () => {
+      overlay.classList.add("hidden");
+      modal.classList.remove("show");
+      document.body.classList.remove("no-scroll");
+    };
+
+    saveBtn.onclick = async () => {
+      const newTitle = input.value.trim();
+      if (!newTitle) return;
+
+      try {
+        const encoded = encodeURIComponent(item.guid);
+        const res = await fetch(`/api/items/${encoded}/edit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newTitle }),
+        });
+
+        if (!res.ok) {
+          console.error("Erreur sauvegarde titre:", await res.text());
+          return;
+        }
+
+        // on referme + refresh
+        overlay.classList.add("hidden");
+        modal.classList.remove("show");
+        document.body.classList.remove("no-scroll");
+        await loadFeed({ useMinSkeleton: false });
+      } catch (err) {
+        console.error("Erreur réseau sauvegarde titre:", err);
+      }
+    };
+  }
+
+
+  function closeEditModal() {
+    const overlay = document.getElementById("edit-overlay");
+    const modal = document.getElementById("edit-modal");
+
+    modal.classList.remove("show");
+    setTimeout(() => {
+      modal.classList.add("hidden");
+      overlay.classList.add("hidden");
+      document.body.classList.remove("no-scroll");
+    }, 200);
+  }
+
+  async function saveEditModal() {
+    if (!editCurrentItem) return;
+
+    const guid = editCurrentItem.guid;
+    const input = document.getElementById("edit-input");
+    const newTitle = input.value.trim();
+
+    if (!newTitle) {
+      alert("Le titre ne peut pas être vide.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(guid)}/edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle }),
+      });
+
+      if (!res.ok) throw new Error("HTTP " + res.status);
+
+      // Mise à jour locale de l'élément sans re-fetch entier
+      editCurrentItem.title = newTitle;
+
+      // Reload minimal → seulement la carte est impactée
+      await loadFeed({ useMinSkeleton: false });
+
+      closeEditModal();
+    } catch (err) {
+      console.error(err);
+      alert("Erreur lors de la mise à jour du titre.");
+    }
+  }
+
 
   // ---------------------------------------------------------------------------
   // Recherche locale
@@ -1233,6 +1524,7 @@ document.addEventListener("DOMContentLoaded", () => {
     modal.classList.remove("hidden");
     requestAnimationFrame(() => modal.classList.add("show"));
     document.body.classList.add("no-scroll");
+    refreshPostersCount();
   }
 
   function closeSettings() {
@@ -1251,6 +1543,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  
   // ---------------------------------------------------------------------------
   // Logs Popup
   // ---------------------------------------------------------------------------
@@ -1401,7 +1694,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function fetchAndFillDetails(item, catKey) {
     if (!detailsPlotEl) return;
 
-    const baseTitle = item.rawTitle || item.title || "";
+    const baseTitle = item.title || item.rawTitle || "";
     if (!baseTitle) {
       detailsPlotEl.textContent = "Titre introuvable pour la recherche.";
       return;
@@ -1811,6 +2104,8 @@ document.addEventListener("DOMContentLoaded", () => {
       cleanupPostersStatus.textContent =
         "Erreur réseau lors du nettoyage des affiches.";
     }
+    
+    await refreshPostersCount();
   }
 
   // ---------------------------------------------------------------------------
@@ -1827,6 +2122,7 @@ document.addEventListener("DOMContentLoaded", () => {
         console.warn("Sync déjà en cours, on recharge seulement le feed.");
         await loadFeed({ useMinSkeleton: !silent });
         await updateLastSyncText();
+        await refreshPostersCount();
         return;
       }
 
@@ -1859,6 +2155,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       await loadFeed({ useMinSkeleton: !silent });
       await updateLastSyncText();
+      await refreshPostersCount();
     } finally {
       updateLastSyncStatus();
     }
@@ -2148,6 +2445,24 @@ document.addEventListener("DOMContentLoaded", () => {
     cleanupOrphanPosters();
   });
 
+  document.addEventListener("click", (e) => {
+    const inCardMenu = e.target.closest(".card-menu-wrapper");
+    const inCustomSelect = e.target.closest(".pill-select-enhanced");
+
+    if (!inCardMenu) {
+      closeAllCardMenus();
+    }
+    if (!inCustomSelect) {
+      closeAllCustomSelects();
+    }
+  });
+
+  document.getElementById("edit-cancel")?.addEventListener("click", closeEditModal);
+  document.getElementById("edit-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "edit-overlay") closeEditModal();
+  });
+  document.getElementById("edit-save")?.addEventListener("click", saveEditModal);
+
   // ---------------------------------------------------------------------------
   // Init globale
   // ---------------------------------------------------------------------------
@@ -2155,6 +2470,11 @@ document.addEventListener("DOMContentLoaded", () => {
   (async () => {
     await loadFavoritesFromApi();
     await initCategories();
+
+    document.querySelectorAll("select.pill-select").forEach((sel) => {
+      enhancePillSelect(sel);
+    });
+
     autosizeSelect(limitSelect);
     autosizeSelect(sortSelect);
     if (cardSizeSelect) autosizeSelect(cardSizeSelect);

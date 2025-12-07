@@ -700,6 +700,36 @@ function cleanupPosterOrphans() {
 }
 
 // ============================================================================
+// STATS AFFICHES (nombre de fichiers locaux)
+// ============================================================================
+
+async function countPosterFiles() {
+  try {
+    if (!fs.existsSync(POSTERS_DIR)) {
+      logWarn("POSTERS_STATS", `POSTERS_DIR n'existe pas: ${POSTERS_DIR}`);
+      return 0;
+    }
+
+    const entries = await fs.promises.readdir(POSTERS_DIR, { withFileTypes: true });
+
+    let total = 0;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+
+      // On ne compte que les images "classiques"
+      if (/\.(jpg|jpeg|png|webp|gif)$/i.test(entry.name)) {
+        total++;
+      }
+    }
+
+    return total;
+  } catch (err) {
+    logError("POSTERS_STATS", `Erreur lors du comptage des affiches: ${err.message}`);
+    return 0;
+  }
+}
+
+// ============================================================================
 // RSS PARSER
 // ============================================================================
 
@@ -1405,6 +1435,12 @@ const getItemByGuidStmt = db.prepare(`
   SELECT id, poster FROM items WHERE guid = ?
 `);
 
+const updateItemTitleStmt = db.prepare(`
+  UPDATE items
+  SET title = ?, updated_at = ?
+  WHERE guid = ?
+`);
+
 async function syncCategory(catKey) {
   const normCat = normalizeCategoryKey(catKey);
   const { id, url } = getRssConfigForCategoryKey(normCat);
@@ -2084,6 +2120,57 @@ app.get("/api/feed", async (req, res) => {
 });
 
 // ============================================================================
+// API ITEMS : édition du titre
+// ============================================================================
+
+app.post("/api/items/:guid/edit", (req, res) => {
+  const guid = req.params.guid;
+  const { title } = req.body || {};
+
+  if (!guid) {
+    return res.status(400).json({
+      ok: false,
+      error: "GUID manquant",
+    });
+  }
+
+  if (!title || typeof title !== "string" || !title.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: "Titre invalide",
+    });
+  }
+
+  try {
+    const now = Date.now();
+    const info = updateItemTitleStmt.run(title.trim(), now, guid);
+
+    if (info.changes === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Élément introuvable",
+      });
+    }
+
+    logInfo(
+      "ITEM_EDIT",
+      `Titre mis à jour pour guid=${guid} → "${title.trim()}"`
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    logError(
+      "ITEM_EDIT",
+      `Erreur MAJ titre guid=${guid}: ${err.message}`
+    );
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur serveur lors de la mise à jour du titre",
+    });
+  }
+});
+
+// ============================================================================
 // API DETAILS (fiche détaillée via TMDB en FR)
 // ============================================================================
 
@@ -2288,6 +2375,143 @@ app.post("/api/admin/posters/cleanup-orphans", (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Erreur pendant le nettoyage des affiches orphelines",
+    });
+  }
+});
+
+// ============================================================================
+// API : rafraîchir la pochette d'un item précis
+// ============================================================================
+
+app.post("/api/posters/refresh/:guid", async (req, res) => {
+  const rawGuid = req.params.guid || "";
+  let guid;
+
+  try {
+    guid = decodeURIComponent(rawGuid);
+  } catch {
+    return res.status(400).json({ ok: false, error: "GUID invalide" });
+  }
+
+  if (!guid) {
+    return res.status(400).json({ ok: false, error: "GUID manquant" });
+  }
+
+  try {
+    // On récupère l'item complet
+    const item = db
+      .prepare(
+        `
+        SELECT guid, category, raw_title, title, poster
+        FROM items
+        WHERE guid = ?
+      `
+      )
+      .get(guid);
+
+    if (!item) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Item introuvable pour ce GUID" });
+    }
+
+    const normCat = normalizeCategoryKey(item.category || "film");
+    const isGame = normCat === "games";
+
+    const searchTitle =
+      item.title ||
+      item.raw_title ||
+      item.rawTitle ||
+      "";
+
+    if (!searchTitle) {
+      return res.status(400).json({
+        ok: false,
+        error: "Titre introuvable pour cet item",
+      });
+    }
+
+    let remotePoster = null;
+
+    if (isGame) {
+      const cacheKey = `games::${searchTitle.toLowerCase()}`;
+      posterCache.delete(cacheKey);
+      remotePoster = await fetchIgdbCoverForTitle(searchTitle);
+    } else if (TMDB_API_KEY) {
+      const cacheKey = `${normCat || "any"}::${searchTitle.toLowerCase()}`;
+      posterCache.delete(cacheKey);
+      remotePoster = await fetchPosterForTitle(searchTitle, normCat);
+    }
+
+    const provider = isGame ? "igdb" : "tmdb";
+    const mediaType =
+      normCat === "series" || normCat === "emissions"
+        ? "series"
+        : isGame
+        ? "games"
+        : "film";
+
+    const externalId =
+      extractImageKeyFromUrl(remotePoster) ||
+      `${provider}_${mediaType}_${Date.now()}`;
+
+    const localUrl = await ensureLocalPoster({
+      provider,
+      mediaType,
+      externalId,
+      remoteUrl: remotePoster,
+    });
+
+    const finalPoster = localUrl || remotePoster;
+    const now = Date.now();
+
+    // 3) On met à jour la BDD pour CE seul item
+    db.prepare(
+      `
+      UPDATE items
+      SET poster = ?, updated_at = ?
+      WHERE guid = ?
+    `
+    ).run(finalPoster, now, guid);
+
+    logInfo(
+      "POSTERS_REFRESH",
+      `Pochette mise à jour pour guid=${guid}, cat=${normCat}, titre="${searchTitle}"`
+    );
+
+    return res.json({
+      ok: true,
+      poster: finalPoster,
+    });
+  } catch (err) {
+    logError(
+      "POSTERS_REFRESH",
+      `Erreur rafraîchissement pochette (guid=${rawGuid}): ${err.message}`
+    );
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur serveur pendant le rafraîchissement de la pochette",
+    });
+  }
+});
+
+// ============================================================================
+// API STATS AFFICHES (compteur pour les settings)
+// ============================================================================
+
+app.get("/api/posters/stats", async (req, res) => {
+  try {
+    const total = await countPosterFiles();
+
+    return res.json({
+      ok: true,
+      total,
+    });
+  } catch (err) {
+    logError("POSTERS_STATS", `Erreur API /api/posters/stats: ${err.message}`);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur pendant le comptage des affiches",
     });
   }
 });
