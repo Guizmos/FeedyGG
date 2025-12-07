@@ -335,13 +335,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const hadCardsBefore = !!resultsEl.querySelector(".card");
 
     if (!hadCardsBefore) {
-      // Premier chargement / F5 → on affiche direct le skeleton
       if (loadingEl) {
         loadingEl.classList.add("hidden");
       }
       renderSkeletonCards();
     } else {
-      // Refresh / tri / filtre → skeleton sur les cartes existantes
       if (loadingEl) {
         loadingEl.classList.add("hidden");
       }
@@ -349,7 +347,6 @@ document.addEventListener("DOMContentLoaded", () => {
       cards.forEach((card) => card.classList.add("card--loading"));
     }
 
-    // On reset la recherche locale
     currentSearch = "";
     if (searchInput) {
       searchInput.value = "";
@@ -396,12 +393,15 @@ document.addEventListener("DOMContentLoaded", () => {
         feedState.groups = [];
       }
 
-      // On re-render : les anciennes cartes (avec card--loading) sont détruites
-      loadingEl.classList.add("hidden");
+      if (loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
       renderFromState();
     } catch (err) {
       console.error(err);
-      loadingEl.classList.add("hidden");
+      if (loadingEl) {
+        loadingEl.classList.add("hidden");
+      }
       resultsEl.innerHTML = "";
       errorEl.textContent = "Impossible de récupérer le flux.";
       errorEl.classList.remove("hidden");
@@ -901,8 +901,20 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST",
       });
 
-      if (!res.ok) {
-        throw new Error("HTTP " + res.status);
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch {
+        // on ignore si ce n'est pas du JSON
+      }
+
+      if (!res.ok || (payload && payload.ok === false)) {
+        const msg =
+          (payload && payload.error) ||
+          `Impossible de rafraîchir la pochette (HTTP ${res.status})`;
+        console.error("Erreur refreshPosterForItem:", msg);
+        alert(msg);
+        return;
       }
 
       await loadFeed({ useMinSkeleton: false });
@@ -914,8 +926,6 @@ document.addEventListener("DOMContentLoaded", () => {
       buttonEl.textContent = oldText;
     }
   }
-
-  let editCurrentItem = null;
 
   function openEditModal(item) {
     const overlay = document.getElementById("edit-overlay");
@@ -974,54 +984,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     };
   }
-
-
-  function closeEditModal() {
-    const overlay = document.getElementById("edit-overlay");
-    const modal = document.getElementById("edit-modal");
-
-    modal.classList.remove("show");
-    setTimeout(() => {
-      modal.classList.add("hidden");
-      overlay.classList.add("hidden");
-      document.body.classList.remove("no-scroll");
-    }, 200);
-  }
-
-  async function saveEditModal() {
-    if (!editCurrentItem) return;
-
-    const guid = editCurrentItem.guid;
-    const input = document.getElementById("edit-input");
-    const newTitle = input.value.trim();
-
-    if (!newTitle) {
-      alert("Le titre ne peut pas être vide.");
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/items/${encodeURIComponent(guid)}/edit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle }),
-      });
-
-      if (!res.ok) throw new Error("HTTP " + res.status);
-
-      // Mise à jour locale de l'élément sans re-fetch entier
-      editCurrentItem.title = newTitle;
-
-      // Reload minimal → seulement la carte est impactée
-      await loadFeed({ useMinSkeleton: false });
-
-      closeEditModal();
-    } catch (err) {
-      console.error(err);
-      alert("Erreur lors de la mise à jour du titre.");
-    }
-  }
-
 
   // ---------------------------------------------------------------------------
   // Recherche locale
@@ -2082,19 +2044,20 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const data = await res.json();
-      const n = Number(data.deletedCount);
-      const hasCount = Number.isFinite(n);
+      const db = Number(data.dbRemoved);
+      const fs = Number(data.fsRemoved);
+      const total =
+        (Number.isFinite(db) ? db : 0) + (Number.isFinite(fs) ? fs : 0);
 
-      if (data.ok && hasCount) {
-        if (n === 0) {
+      if (data.ok) {
+        if (total === 0) {
           cleanupPostersStatus.textContent =
             "Aucune affiche orpheline à supprimer.";
         } else {
           cleanupPostersStatus.textContent =
-            `${n} affiche${n > 1 ? "s" : ""} orpheline${n > 1 ? "s" : ""} supprimée${n > 1 ? "s" : ""}.`;
+            `${total} élément${total > 1 ? "s" : ""} nettoyé${total > 1 ? "s" : ""} ` +
+            `(DB: ${Number.isFinite(db) ? db : 0}, fichiers: ${Number.isFinite(fs) ? fs : 0}).`;
         }
-      } else if (data.ok) {
-        cleanupPostersStatus.textContent = "Nettoyage terminé.";
       } else {
         cleanupPostersStatus.textContent =
           data.error || "Erreur pendant le nettoyage des affiches.";
@@ -2104,7 +2067,7 @@ document.addEventListener("DOMContentLoaded", () => {
       cleanupPostersStatus.textContent =
         "Erreur réseau lors du nettoyage des affiches.";
     }
-    
+
     await refreshPostersCount();
   }
 
@@ -2456,12 +2419,6 @@ document.addEventListener("DOMContentLoaded", () => {
       closeAllCustomSelects();
     }
   });
-
-  document.getElementById("edit-cancel")?.addEventListener("click", closeEditModal);
-  document.getElementById("edit-overlay")?.addEventListener("click", (e) => {
-    if (e.target.id === "edit-overlay") closeEditModal();
-  });
-  document.getElementById("edit-save")?.addEventListener("click", saveEditModal);
 
   // ---------------------------------------------------------------------------
   // Init globale

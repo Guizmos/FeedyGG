@@ -308,7 +308,7 @@ function schedulePeriodicSync(minutes) {
   logInfo("SYNC", `Programmation: toutes les ${m} minutes`);
 
   syncIntervalHandle = setInterval(() => {
-    syncAllCategories().catch((e) =>
+    runGlobalSyncOnce().catch((e) =>
       logError("SYNC_PERIODIC", `Erreur: ${e.message}`)
     );
   }, ms);
@@ -2398,7 +2398,6 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
   }
 
   try {
-    // On récupère l'item complet
     const item = db
       .prepare(
         `
@@ -2431,48 +2430,49 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
       });
     }
 
-    let remotePoster = null;
+    let newPoster = null;
 
-    if (isGame) {
-      const cacheKey = `games::${searchTitle.toLowerCase()}`;
-      posterCache.delete(cacheKey);
-      remotePoster = await fetchIgdbCoverForTitle(searchTitle);
-    } else if (TMDB_API_KEY) {
-      const cacheKey = `${normCat || "any"}::${searchTitle.toLowerCase()}`;
-      posterCache.delete(cacheKey);
-      remotePoster = await fetchPosterForTitle(searchTitle, normCat);
+    try {
+      if (isGame) {
+        // on vide le cache pour forcer une nouvelle recherche
+        const cacheKey = `games::${searchTitle.toLowerCase()}`;
+        posterCache.delete(cacheKey);
+
+        // igdb retourne une URL distante (pas de cache local pour l’instant)
+        const remoteCover = await fetchIgdbCoverForTitle(searchTitle);
+        if (remoteCover) {
+          newPoster = remoteCover;
+        }
+      } else if (TMDB_API_KEY) {
+        const cacheKey = `${normCat || "any"}::${searchTitle.toLowerCase()}`;
+        posterCache.delete(cacheKey);
+
+        // fetchPosterForTitle gère déjà le cache local (/posters/...)
+        newPoster = await fetchPosterForTitle(searchTitle, normCat);
+      }
+    } catch (e) {
+      const src = isGame ? "IGDB" : "TMDB";
+      logError(
+        "POSTERS_REFRESH",
+        `Erreur lors de la récupération de la pochette (${src}) pour "${searchTitle}": ${e.message}`
+      );
     }
 
-    const provider = isGame ? "igdb" : "tmdb";
-    const mediaType =
-      normCat === "series" || normCat === "emissions"
-        ? "series"
-        : isGame
-        ? "games"
-        : "film";
+    if (!newPoster) {
+      return res.status(404).json({
+        ok: false,
+        error: "Aucune nouvelle pochette trouvée pour ce titre",
+      });
+    }
 
-    const externalId =
-      extractImageKeyFromUrl(remotePoster) ||
-      `${provider}_${mediaType}_${Date.now()}`;
-
-    const localUrl = await ensureLocalPoster({
-      provider,
-      mediaType,
-      externalId,
-      remoteUrl: remotePoster,
-    });
-
-    const finalPoster = localUrl || remotePoster;
     const now = Date.now();
-
-    // 3) On met à jour la BDD pour CE seul item
     db.prepare(
       `
       UPDATE items
       SET poster = ?, updated_at = ?
       WHERE guid = ?
     `
-    ).run(finalPoster, now, guid);
+    ).run(newPoster, now, guid);
 
     logInfo(
       "POSTERS_REFRESH",
@@ -2481,7 +2481,7 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
 
     return res.json({
       ok: true,
-      poster: finalPoster,
+      poster: newPoster,
     });
   } catch (err) {
     logError(
