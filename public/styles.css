@@ -2032,6 +2032,13 @@ body.cards-size-large .btn {
   border-color: rgba(248, 113, 113, 0.9);
 }
 
+.theme-light .settings-modal {
+  background: #ffffffee;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  color: var(--text);
+}
+
 .theme-light .btn-clean-posters {
   color: #b91c1c;
   border-color: rgba(248, 113, 113, 0.9);
@@ -2043,6 +2050,20 @@ body.cards-size-large .btn {
   box-shadow: 0 4px 10px rgba(248, 113, 113, 0.45);
 }
 
+.btn-close {
+  background: var(--accent);
+  color: #020817;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 0.9rem;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+/* ====================================================================== */
+/* LOGS                                                                   */
+/* ====================================================================== */
 .btn-logs {
   background: transparent;
   color: var(--accent);
@@ -2056,17 +2077,6 @@ body.cards-size-large .btn {
 
 .btn-logs:hover {
   background: var(--accent-soft);
-}
-
-.btn-close {
-  background: var(--accent);
-  color: #020817;
-  border-radius: 999px;
-  padding: 6px 16px;
-  font-size: 0.9rem;
-  border: none;
-  cursor: pointer;
-  transition: var(--transition-fast);
 }
 
 .btn-close:hover {
@@ -2129,12 +2139,9 @@ body.cards-size-large .btn {
   border-color: rgba(148, 163, 184, 0.5);
 }
 
-.theme-light .settings-modal {
-  background: #ffffffee;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
-  color: var(--text);
-}
+/* ====================================================================== */
+/* MODAL DETAILS                                                          */
+/* ====================================================================== */
 
 .details-modal {
   width: min(1000px, calc(100% - 32px));
@@ -2326,12 +2333,6 @@ body.cards-size-large .btn {
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.85);
 }
 
-.theme-light .card--skeleton {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(148, 163, 184, 0.35);
-  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.35);
-}
-
 .skeleton {
   position: relative;
   overflow: hidden;
@@ -2355,14 +2356,12 @@ body.cards-size-large .btn {
   }
 }
 
-/* Poster skeleton */
 .skeleton-poster {
   width: 120px;
   height: 180px;
   border-radius: 12px;
 }
 
-/* Compact / Large adapt */
 body.cards-size-compact .skeleton-poster {
   width: 80px;
   height: 118px;
@@ -2375,7 +2374,6 @@ body.cards-size-large .skeleton-poster {
   border-radius: 16px;
 }
 
-/* Lignes texte */
 .skeleton-line {
   height: 10px;
   border-radius: 999px;
@@ -2395,7 +2393,6 @@ body.cards-size-large .skeleton-poster {
   width: 40%;
 }
 
-/* Boutons */
 .skeleton-pill {
   height: 32px;
   min-width: 90px;
@@ -2404,6 +2401,12 @@ body.cards-size-large .skeleton-poster {
 
 .skeleton-btn + .skeleton-btn {
   margin-left: 6px;
+}
+
+.theme-light .card--skeleton {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.35);
 }
 
 /* ====================================================================== */
@@ -2522,42 +2525,39 @@ button:focus {
   display: block;
 }
 
-/* Wrapper du select amélioré */
 .pill-select-enhanced {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
 
-/* Le vrai select natif : présent pour la logique, invisible pour l'utilisateur */
 .pill-select-native {
   position: absolute;
+  inset: 0;
   opacity: 0;
   pointer-events: none;
-  width: 0;
-  height: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
 }
 
-/* Le bouton qui remplace visuellement le select natif */
 .pill-select-trigger {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 6px;
-  padding-right: 28px !important;
 }
 
 .pill-select-trigger-label {
-  white-space: nowrap;
+  flex: 1;
+  text-align: left;
 }
 
-/* petite icône de flèche (on garde Material Symbols) */
 .pill-select-trigger-icon {
   font-size: 18px;
   line-height: 1;
 }
 
-/* Menu déroulant custom, style proche du menu 3 points */
 .pill-select-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -2576,7 +2576,6 @@ button:focus {
   z-index: 20;
 }
 
-/* Items du menu */
 .pill-select-menu-item {
   border: none;
   background: transparent;
@@ -3128,7 +3127,8 @@ body.no-scroll {
   }
 
   .pill-select-enhanced {
-    position: static;
+    position: relative;
+    display: inline-block;
   }
 
   .pill-select-enhanced .pill-select-native {

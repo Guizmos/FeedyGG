@@ -2208,6 +2208,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       refreshIntervalSelect.value = selectValue;
       autosizeSelect(refreshIntervalSelect);
+      refreshIntervalSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
       scheduleAutoRefresh(minutes);
     } catch (err) {
@@ -2428,10 +2429,6 @@ document.addEventListener("DOMContentLoaded", () => {
     await loadFavoritesFromApi();
     await initCategories();
 
-    document.querySelectorAll("select.pill-select").forEach((sel) => {
-      enhancePillSelect(sel);
-    });
-
     autosizeSelect(limitSelect);
     autosizeSelect(sortSelect);
     if (cardSizeSelect) autosizeSelect(cardSizeSelect);
@@ -2443,6 +2440,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     await initRetentionSettings();
+    
+    document.querySelectorAll("select.pill-select").forEach((sel) => {
+      enhancePillSelect(sel);
+    });
+    
     await loadFeed();
     await initVersionFooter();
     await updateLastSyncText();
