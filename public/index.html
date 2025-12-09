@@ -332,6 +332,10 @@
             Choisissez combien de jours les éléments sont conservés en base avant d’être automatiquement supprimés.
           </p>
 
+          <p class="settings-warning" style="color:#ef4444; margin-top: 8px; font-size: 13px">
+            ⚠️ Réduire la durée de rétention peut supprimer immédiatement des éléments plus anciens.
+          </p>
+
           <div class="settings-row">
             <div class="settings-row-main">
               <span class="settings-icon material-symbols-rounded">delete_forever</span>
@@ -355,11 +359,6 @@
             </div>
           </div>
 
-          <p class="settings-warning" style="color:#ef4444; margin-top: 12px; font-size: 13px">
-            ⚠️ Réduire la durée de rétention peut supprimer immédiatement des éléments plus anciens.
-          </p>
-
-          <!-- 🔽 Nouveau bloc : nettoyage des affiches orphelines -->
           <div class="settings-row settings-row-danger">
             <div class="settings-row-main">
               <span class="settings-icon settings-icon-danger material-symbols-rounded">
@@ -378,7 +377,25 @@
               </button>
             </div>
           </div>
+
           <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">monitoring</span>
+              <div class="settings-text">
+                <span class="settings-label">Statistiques</span>
+                <div class="settings-subtitle">
+                  Visualiser l’évolution de la base et des affiches.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <button id="open-stats" class="btn-logs">
+                Afficher
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-row posters-row">
             <div class="settings-row-main">
               <span class="settings-icon material-symbols-rounded">photo_library</span>
               <div class="settings-text">
@@ -389,7 +406,7 @@
               </div>
             </div>
             <div class="settings-center">
-              <span id="posters-count" class="settings-label">—</span>
+              <span id="posters-count" class="settings-label posters-count">—</span>
             </div>
           </div>
 
@@ -414,6 +431,53 @@
 
     <div class="settings-footer">
       <button id="close-logs" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <div id="stats-overlay" class="settings-overlay hidden"></div>
+  <div id="stats-modal" class="settings-modal logs-modal hidden">
+    <h2>Statistiques</h2>
+
+    <div class="stats-modal-toolbar">
+      <div class="stats-metric-group">
+        <button class="stats-tab stats-tab-active" data-metric="db-size">
+          Taille de la base
+        </button>
+        <button class="stats-tab" data-metric="posters">
+          Pochettes locales
+        </button>
+        <button class="stats-tab" data-metric="categories">
+          Cartes par catégorie
+        </button>
+        <button class="stats-tab" data-metric="api-calls">
+          Appels API
+        </button>
+      </div>
+
+      <div class="stats-range-toolbar">
+        <button
+          class="stats-range-tab stats-range-tab-active"
+          data-range="live">
+          Aujourd’hui
+        </button>
+        <button class="stats-range-tab" data-range="7">
+          7 jours
+        </button>
+        <button class="stats-range-tab" data-range="30">
+          30 jours
+        </button>
+        <button class="stats-range-tab" data-range="all">
+          Tout
+        </button>
+      </div>
+    </div>
+
+    <div class="stats-chart-shell">
+      <canvas id="stats-chart"></canvas>
+    </div>
+
+    <div class="settings-footer">
+      <button id="close-stats" class="btn-close">Fermer</button>
     </div>
   </div>
 
@@ -498,6 +562,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

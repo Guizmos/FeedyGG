@@ -1496,6 +1496,17 @@ body.cards-size-large .btn {
   flex: 1;
 }
 
+.settings-row.posters-row .settings-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 20px;
+}
+
+.settings-row.posters-row .posters-count {
+  text-align: center;
+}
+
 .settings-layout {
   display: flex;
   align-items: stretch;
@@ -1656,7 +1667,6 @@ body.cards-size-large .btn {
   color: #ffffff;
 }
 
-/* Overlay édition titre */
 .edit-overlay {
   position: fixed;
   inset: 0;
@@ -1668,13 +1678,12 @@ body.cards-size-large .btn {
   z-index: 60;
 }
 
-/* Modal plus compact */
 .edit-modal {
   background: var(--bg-soft);
   border-radius: 24px;
   box-shadow: var(--shadow-soft);
   padding: 20px 24px 18px;
-  max-width: 520px;     /* <-- plus petit que ton gros modal plein écran */
+  max-width: 520px;
   width: 100%;
   color: var(--text);
 }
@@ -1683,13 +1692,11 @@ body.cards-size-large .btn {
   background: rgba(255, 255, 255, 0.95);
 }
 
-/* Titre du modal */
 .edit-modal-title {
   margin: 0 0 16px;
   font-size: 1.3rem;
 }
 
-/* Corps : pile les champs avec un peu d'air */
 .edit-modal-body {
   display: flex;
   flex-direction: column;
@@ -1709,14 +1716,12 @@ body.cards-size-large .btn {
   color: var(--muted);
 }
 
-/* Ligne du titre original, bien lisible */
 .edit-original {
   font-size: 0.9rem;
   line-height: 1.4;
   word-break: break-word;
 }
 
-/* Input */
 .edit-input {
   width: 100%;
   padding: 8px 10px;
@@ -1732,15 +1737,12 @@ body.cards-size-large .btn {
   border-color: rgba(148, 163, 184, 0.6);
 }
 
-/* Footer + boutons */
 .edit-modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-/* Si tu as déjà .btn ailleurs, tu peux garder,
-   mais au cas où : */
 .btn {
   border-radius: 999px;
   padding: 6px 16px;
@@ -1752,13 +1754,11 @@ body.cards-size-large .btn {
   justify-content: center;
 }
 
-/* Secondaire = type "Annuler" */
 .btn-secondary {
   background: rgba(148, 163, 184, 0.15);
   color: var(--text);
 }
 
-/* Primaire = "Enregistrer" */
 .btn-primary {
   background: var(--accent);
   color: #0b1120;
@@ -1837,7 +1837,6 @@ body.cards-size-large .btn {
   right: 0;
 }
 
-/* Bouton 3 points */
 .card-menu-btn {
   width: 22px;
   height: 22px;
@@ -1877,7 +1876,6 @@ body.cards-size-large .btn {
   color: #9ca3af;
 }
 
-/* Menu déroulant */
 .card-menu {
   position: absolute;
   top: 26px;
@@ -2320,6 +2318,146 @@ body.cards-size-large .btn {
 }
 
 /* ====================================================================== */
+/* MODAL STATS                                                            */
+/* ====================================================================== */
+
+.stats-chart-shell {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 253, 0.35);
+
+  flex: 0 0 auto;
+  display: flex;
+}
+
+.stats-chart-shell canvas {
+  width: 100% !important;
+  height: 370px !important;
+}
+
+.stats-modal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.stats-metric-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stats-range-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.stats-tab,
+.stats-range-tab {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.20);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: 0.18s ease;
+  white-space: nowrap;
+}
+
+.stats-tab:hover,
+.stats-range-tab:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.stats-tab-active,
+.stats-range-tab-active {
+  background: var(--accent);
+  color: #020817;
+  border-color: var(--accent);
+}
+
+.theme-light .stats-tab,
+.theme-light .stats-range-tab {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #475569;
+}
+
+.theme-light .stats-tab-active,
+.theme-light .stats-range-tab-active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+.stats-range-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.stats-range-tab {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(148, 163, 184, 0.20);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.stats-range-tab:hover {
+  background: rgba(255,255,255,0.10);
+}
+
+.stats-range-tab-active {
+  background: var(--accent);
+  color: #020817;
+  border-color: var(--accent);
+}
+
+#stats-modal.settings-modal {
+  background: #020617;
+}
+
+.theme-light #stats-modal.settings-modal {
+  background: #ffffff;
+}
+
+.theme-light .stats-range-tab {
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.15);
+  color: #475569;
+}
+
+.theme-light .stats-range-tab-active {
+  background: var(--accent);
+  color: white;
+}
+
+.theme-light .stats-chart-shell {
+  background: #f9fafb;
+  border-color: rgba(148, 163, 184, 0.5);
+}
+
+.theme-light .stats-tab {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #4b5563;
+}
+
+.theme-light .stats-tab-active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: rgba(56, 189, 248, 0.9);
+}
+
+/* ====================================================================== */
 /* SKELETON LOADER                                                        */
 /* ====================================================================== */
 
@@ -2695,6 +2833,15 @@ body.no-scroll {
   overscroll-behavior: contain;
 }
 
+.settings-footer {
+  margin-top: 0 !important;
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+
+.settings-modal {
+  padding-bottom: 5px !important;
+}
 
 /* ====================================================================== */
 /* RESPONSIVE                                                             */
@@ -3167,10 +3314,14 @@ body.no-scroll {
 
 @media (min-width: 769px) {
   .settings-modal {
-    height: 60vh;
-    max-height: 80vh;
+    height: 80vh;
+    max-height: 90vh;
   }
 
+  #stats-modal.settings-modal {
+    height: 85vh;
+    max-height: 95vh;
+  }
 
   .settings-modal.details-modal {
     height: auto;

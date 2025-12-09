@@ -1,4 +1,3 @@
-// Gestion des favoris côté front
 let favoritesSet = new Set();
 
 async function loadFavoritesFromApi() {
@@ -15,7 +14,7 @@ async function addFavorite(guid) {
   const encoded = encodeURIComponent(guid);
   try {
     await fetch(`/api/favorites/${encoded}`, { method: "POST" });
-    favoritesSet.add(guid); // on garde le guid "plein" dans le Set
+    favoritesSet.add(guid);
   } catch (err) {
     console.error("Erreur addFavorite:", err);
   }
@@ -35,7 +34,6 @@ function isFavorite(guid) {
   return favoritesSet.has(guid);
 }
 
-// Thème global
 function applyTheme(mode) {
   document.body.classList.remove("theme-light");
 
@@ -51,7 +49,6 @@ function applyTheme(mode) {
   }
 }
 
-// Ajustement auto de la largeur des <select>
 function autosizeSelect(select) {
   if (!select) return;
 
@@ -71,6 +68,22 @@ function autosizeSelect(select) {
 
   select.style.width = width + "px";
 }
+
+// ============================================================================
+// VARIABLES GLOBALES STATS
+// ============================================================================
+
+let statsChart = null;
+let statsLiveData = null;
+let statsDailyCache = {
+  "7": null,
+  "30": null,
+  all: null,
+};
+
+let currentStatsMetric = "db-size";
+let currentStatsRange = "live";
+
 
 // ============================================================================
 // MAIN UI LOGIC
@@ -137,6 +150,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const lastSyncValueEl = document.getElementById("last-sync-value");
   const cleanupPostersBtn = document.getElementById("cleanup-posters-btn");
   const cleanupPostersStatus = document.getElementById("cleanup-posters-status");
+  const openStatsBtn = document.getElementById("open-stats");
+  const statsOverlay = document.getElementById("stats-overlay");
+  const statsModal = document.getElementById("stats-modal");
+  const closeStatsBtn = document.getElementById("close-stats");
+  const statsTabs = document.querySelectorAll(".stats-tab");
+  const statsRangeTabs = document.querySelectorAll(".stats-range-tab");
 
   let activeSettingsSection = "theme";
   let currentDateFilterDays = null;
@@ -471,7 +490,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function enhancePillSelect(nativeSelect) {
-    // wrapper qui englobe le select + le faux bouton
     const wrapper = document.createElement("div");
     wrapper.className = "pill-select-enhanced";
 
@@ -481,7 +499,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     nativeSelect.classList.add("pill-select-native");
 
-    // Bouton visible (on lui laisse la classe .pill-select pour récupérer ton style)
     const trigger = document.createElement("button");
     trigger.type = "button";
     trigger.className = "pill-select pill-select-trigger";
@@ -499,7 +516,6 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     updateLabel();
 
-    // Menu custom
     const menu = document.createElement("div");
     menu.className = "pill-select-menu hidden";
 
@@ -522,10 +538,8 @@ document.addEventListener("DOMContentLoaded", () => {
         e.stopPropagation();
 
         nativeSelect.value = opt.value;
-        // On déclenche l'évènement change pour ne **rien casser** dans ton code
         nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
-        // maj label + état actif
         updateLabel();
         menu.querySelectorAll(".pill-select-menu-item").forEach((btn) => {
           btn.classList.toggle("active", btn === item);
@@ -620,7 +634,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const menu = document.createElement("div");
       menu.className = "card-menu hidden";
 
-      // --- Ajouter / retirer des favoris ---
       const initiallyFav = item.isFavorite || isFavorite(guid);
 
       const menuFav = document.createElement("button");
@@ -653,7 +666,6 @@ document.addEventListener("DOMContentLoaded", () => {
         closeAllCardMenus();
       });
 
-      // --- Rafraîchir la pochette ---
       const menuRefresh = document.createElement("button");
       menuRefresh.type = "button";
       menuRefresh.className = "card-menu-item";
@@ -905,7 +917,6 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         payload = await res.json();
       } catch {
-        // on ignore si ce n'est pas du JSON
       }
 
       if (!res.ok || (payload && payload.ok === false)) {
@@ -974,7 +985,6 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        // on referme + refresh
         overlay.classList.add("hidden");
         modal.classList.remove("show");
         document.body.classList.remove("no-scroll");
@@ -1273,7 +1283,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const infoEl = dateFilterPanel?.querySelector(".date-filter-info");
     if (!infoEl) return;
 
-    // On vide le texte systématiquement
     infoEl.textContent = "";
   }
 
@@ -1487,6 +1496,7 @@ document.addEventListener("DOMContentLoaded", () => {
     requestAnimationFrame(() => modal.classList.add("show"));
     document.body.classList.add("no-scroll");
     refreshPostersCount();
+    updateLastSyncStatus();
   }
 
   function closeSettings() {
@@ -1505,7 +1515,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  
   // ---------------------------------------------------------------------------
   // Logs Popup
   // ---------------------------------------------------------------------------
@@ -1563,7 +1572,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function openLogs() {
     if (!logsOverlay || !logsModal) return;
 
-    // On masque le modal des paramètres derrière
     if (modal) {
       modal.classList.add("settings-modal-behind-logs");
     }
@@ -1584,7 +1592,6 @@ document.addEventListener("DOMContentLoaded", () => {
       logsModal.classList.add("hidden");
       document.body.classList.remove("no-scroll");
 
-      // On ré-affiche le modal des paramètres une fois les logs fermés
       if (modal) {
         modal.classList.remove("settings-modal-behind-logs");
       }
@@ -1596,6 +1603,322 @@ document.addEventListener("DOMContentLoaded", () => {
       closeLogs();
     }
   });
+
+// ---------------------------------------------------------------------------
+// Stats Popup + Graphiques
+// ---------------------------------------------------------------------------
+
+async function fetchLiveStats() {
+  const res = await fetch("/api/stats", { cache: "no-cache" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  statsLiveData = await res.json();
+}
+
+async function fetchDailyStats(range) {
+  if (!range || range === "live") return null;
+
+  if (statsDailyCache[range]) {
+    return statsDailyCache[range];
+  }
+
+  const res = await fetch(`/api/stats/daily?range=${encodeURIComponent(range)}`, {
+    cache: "no-cache",
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  statsDailyCache[range] = data;
+  return data;
+}
+
+async function updateStatsChart() {
+  try {
+    if (!statsLiveData) {
+      await fetchLiveStats();
+    }
+
+    let dailyData = null;
+    if (currentStatsRange !== "live") {
+      dailyData = await fetchDailyStats(currentStatsRange);
+    }
+
+    renderStatsChart(currentStatsMetric, currentStatsRange, statsLiveData, dailyData);
+  } catch (err) {
+    console.error("Erreur chargement stats :", err);
+  }
+}
+
+function renderStatsChart(metric, range, liveData, dailyData) {
+  const canvas = document.getElementById("stats-chart");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  const ctx = canvas.getContext("2d");
+
+  if (statsChart) {
+    statsChart.destroy();
+    statsChart = null;
+  }
+
+  const dbSizeHistoryLive = Array.isArray(liveData?.dbSizeHistory)
+    ? liveData.dbSizeHistory
+    : [];
+  const postersHistoryLive = Array.isArray(liveData?.postersHistory)
+    ? liveData.postersHistory
+    : [];
+  const categoryCountsLive = Array.isArray(liveData?.categoryCounts)
+    ? liveData.categoryCounts
+    : [];
+
+  const apiCallsTodayLive = Array.isArray(liveData?.apiCalls)
+    ? liveData.apiCalls
+    : [];
+  const apiCallsHistoryLive = Array.isArray(liveData?.apiCallsHistory)
+    ? liveData.apiCallsHistory
+    : [];
+
+  let labels = [];
+  let datasets = [];
+  let type = "line";
+
+  // --- DB size / Posters -----------------------------------------------------
+  if (metric === "db-size" || metric === "posters") {
+    let points = [];
+
+    if (range !== "live" && dailyData && Array.isArray(dailyData.points)) {
+      points = dailyData.points;
+    }
+
+    if (!points.length) {
+      points = metric === "db-size" ? dbSizeHistoryLive : postersHistoryLive;
+    }
+
+    if (metric === "db-size") {
+      labels = points.map((p) => p.date || p.date_key || "Aujourd'hui");
+      const dataValues = points.map((p) =>
+        typeof p.dbSizeMb === "number" ? p.dbSizeMb : (p.sizeMb || 0)
+      );
+
+      datasets = [
+        {
+          label: "Taille de la base (Mo)",
+          data: dataValues,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 3,
+        },
+      ];
+    } else {
+      labels = points.map((p) => p.date || p.date_key || "Aujourd'hui");
+      const dataValues = points.map((p) =>
+        typeof p.postersCount === "number" ? p.postersCount : (p.count || 0)
+      );
+
+      datasets = [
+        {
+          label: "Pochettes locales",
+          data: dataValues,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 3,
+        },
+      ];
+    }
+
+    type = "line";
+  }
+
+  // --- Répartition par catégories -------------------------------------------
+  else if (metric === "categories") {
+    const items = categoryCountsLive;
+
+    labels = items.map((c) => c.label);
+    const dataValues = items.map((c) => c.count || 0);
+
+    datasets = [
+      {
+        label: "Cartes disponibles (aujourd'hui)",
+        data: dataValues,
+        borderWidth: 2,
+        pointRadius: 0,
+      },
+    ];
+
+    type = "bar";
+  }
+
+  // --- Appels API externes (TMDB / IGDB / etc.) ------------------------------
+  else if (metric === "api-calls") {
+    // Mode "live" → on affiche un bar chart par provider (TMDB, IGDB, …)
+    if (
+      range === "live" ||
+      !dailyData ||
+      !Array.isArray(dailyData.points) ||
+      !dailyData.points.length
+    ) {
+      const items = apiCallsTodayLive.length
+        ? apiCallsTodayLive
+        : []; // fallback éventuel
+
+      labels = items.map((p) => p.label || p.provider || "—");
+      const dataValues = items.map((p) => Number(p.count) || 0);
+
+      datasets = [
+        {
+          label: "Appels API (dernière période)",
+          data: dataValues,
+          borderWidth: 2,
+          pointRadius: 0,
+        },
+      ];
+
+      type = "bar";
+    } else {
+      // Mode "7 / 30 / all" → on fait un multi-dataset (une courbe par provider)
+      const points = dailyData.points;
+
+      labels = points.map((p) => p.date || p.date_key || "Jour");
+
+      const providerKeys = new Set();
+
+      points.forEach((p) => {
+        Object.keys(p).forEach((key) => {
+          if (key === "date" || key === "date_key") return;
+          providerKeys.add(key);
+        });
+      });
+
+      datasets = Array.from(providerKeys).map((key) => ({
+        label: key.toUpperCase(),
+        data: points.map((p) => Number(p[key]) || 0),
+        tension: 0.3,
+        borderWidth: 2,
+        pointRadius: 3,
+      }));
+
+      type = "line";
+    }
+  }
+
+  statsChart = new Chart(ctx, {
+    type,
+    data: {
+      labels,
+      datasets,
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: {
+            color: "#e5e7eb",
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#9ca3af",
+          },
+          grid: {
+            display: false,
+          },
+        },
+        y: {
+          ticks: {
+            color: "#9ca3af",
+          },
+          grid: {
+            color: "rgba(148,163,253,0.15)",
+          },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+function openStatsModal() {
+  if (!statsOverlay || !statsModal) return;
+
+  statsOverlay.classList.remove("hidden");
+  statsModal.classList.remove("hidden");
+  requestAnimationFrame(() => statsModal.classList.add("show"));
+  document.body.classList.add("no-scroll");
+
+  currentStatsMetric = "db-size";
+  currentStatsRange = "live";
+  statsLiveData = null;
+  statsDailyCache = { "7": null, "30": null, all: null };
+
+  const tabs = document.querySelectorAll(".stats-tab");
+  tabs.forEach((t) =>
+    t.classList.toggle("stats-tab-active", t.dataset.metric === "db-size")
+  );
+
+  statsRangeTabs?.forEach((t) => {
+    const r = t.dataset.range || "live";
+    t.classList.toggle("stats-range-tab-active", r === "live");
+  });
+
+  updateStatsChart();
+}
+
+function closeStatsModal() {
+  if (!statsOverlay || !statsModal) return;
+
+  statsModal.classList.remove("show");
+  setTimeout(() => {
+    statsOverlay.classList.add("hidden");
+    statsModal.classList.add("hidden");
+    document.body.classList.remove("no-scroll");
+  }, 200);
+}
+
+openStatsBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  openStatsModal();
+});
+
+closeStatsBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeStatsModal();
+});
+
+statsOverlay?.addEventListener("click", (e) => {
+  if (e.target === statsOverlay) {
+    closeStatsModal();
+  }
+});
+
+statsTabs.forEach((tab) => {
+  tab.addEventListener("click", (e) => {
+    e.preventDefault();
+    const metric = tab.dataset.metric || "db-size";
+
+    currentStatsMetric = metric;
+
+    statsTabs.forEach((t) =>
+      t.classList.toggle("stats-tab-active", t === tab)
+    );
+
+    updateStatsChart();
+  });
+});
+
+statsRangeTabs.forEach((tab) => {
+  tab.addEventListener("click", (e) => {
+    e.preventDefault();
+    const range = tab.dataset.range || "live";
+
+    currentStatsRange = range;
+
+    statsRangeTabs.forEach((t) =>
+      t.classList.toggle("stats-range-tab-active", t === tab)
+    );
+
+    updateStatsChart();
+  });
+});
 
   // ---------------------------------------------------------------------------
   // Détails (modal TMDB)
@@ -2216,7 +2539,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-
   // ---------------------------------------------------------------------------
   // Events
   // ---------------------------------------------------------------------------
@@ -2331,6 +2653,11 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    if (statsModal && !statsModal.classList.contains("hidden") && statsModal.classList.contains("show")) {
+      closeStatsModal();
+      return;
+    }
+
     if (logsModal && !logsModal.classList.contains("hidden") && logsModal.classList.contains("show")) {
       closeLogs();
       return;
@@ -2403,7 +2730,6 @@ document.addEventListener("DOMContentLoaded", () => {
     scheduleAutoRefresh(minutes);
   });
 
-
   cleanupPostersBtn?.addEventListener("click", (e) => {
     e.preventDefault();
     cleanupOrphanPosters();
@@ -2440,11 +2766,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     await initRetentionSettings();
-    
+
     document.querySelectorAll("select.pill-select").forEach((sel) => {
       enhancePillSelect(sel);
     });
-    
+
     await loadFeed();
     await initVersionFooter();
     await updateLastSyncText();

@@ -220,6 +220,40 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stats_daily (
+    date_key        TEXT PRIMARY KEY,          -- 'YYYY-MM-DD'
+    db_size_bytes   INTEGER NOT NULL,
+    posters_count   INTEGER NOT NULL,
+    items_total     INTEGER NOT NULL,
+    items_film      INTEGER NOT NULL,
+    items_series    INTEGER NOT NULL,
+    items_emissions INTEGER NOT NULL,
+    items_spectacle INTEGER NOT NULL,
+    items_animation INTEGER NOT NULL,
+    items_games     INTEGER NOT NULL,
+    tmdb_calls      INTEGER NOT NULL DEFAULT 0,
+    igdb_calls      INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL
+  );
+`);
+
+try {
+  db.exec(`ALTER TABLE stats_daily ADD COLUMN tmdb_calls INTEGER NOT NULL DEFAULT 0`);
+} catch (e) {
+  if (!String(e.message || "").includes("duplicate column")) {
+    logError("DB_MIGRATE", `Erreur ajout colonne tmdb_calls: ${e.message}`);
+  }
+}
+
+try {
+  db.exec(`ALTER TABLE stats_daily ADD COLUMN igdb_calls INTEGER NOT NULL DEFAULT 0`);
+} catch (e) {
+  if (!String(e.message || "").includes("duplicate column")) {
+    logError("DB_MIGRATE", `Erreur ajout colonne igdb_calls: ${e.message}`);
+  }
+}
+
 // ============================================================================
 // SETTINGS GLOBAUX (table settings) + intervalle de sync
 // ============================================================================
@@ -580,7 +614,6 @@ function cleanupPosterOrphans() {
   let dbRemoved = 0;
   let fsRemoved = 0;
 
-  // --- Phase 1 : entrées DB "posters" sans aucun item associé ---
   try {
     const orphanRowsStmt = db.prepare(`
       SELECT p.provider, p.media_type, p.external_id, p.file_path
@@ -631,7 +664,6 @@ function cleanupPosterOrphans() {
     logError("POSTERS_CLEANUP", `Erreur phase 1 (DB orpheline): ${err.message}`);
   }
 
-  // --- Phase 2 : fichiers sur disque sans entrée DB ---
   try {
     if (!fs.existsSync(POSTERS_DIR)) {
       logWarn("POSTERS_CLEANUP", `POSTERS_DIR n'existe pas: ${POSTERS_DIR}`);
@@ -649,7 +681,6 @@ function cleanupPosterOrphans() {
 
         const fileName = entry.name;
 
-        // On ne s'occupe que des fichiers d'images classiques
         if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
           continue;
         }
@@ -667,7 +698,7 @@ function cleanupPosterOrphans() {
         }
 
         if (used > 0) {
-          continue; // fichier encore référencé en DB
+          continue;
         }
 
         const absPath = path.join(POSTERS_DIR, fileName);
@@ -700,8 +731,43 @@ function cleanupPosterOrphans() {
 }
 
 // ============================================================================
-// STATS AFFICHES (nombre de fichiers locaux)
+// STATS GLOBALES (taille BDD, affiches locales, cartes par catégorie)
 // ============================================================================
+
+function getDbSizeMb() {
+  try {
+    const stats = fs.statSync(DB_PATH);
+    const sizeBytes = stats.size || 0;
+    return +(sizeBytes / (1024 * 1024)).toFixed(2);
+  } catch (err) {
+    logError("STATS_DB", `Erreur getDbSizeMb: ${err.message}`);
+    return 0;
+  }
+}
+
+function getCategoryCounts() {
+  try {
+    const rows = db.prepare(`
+      SELECT category, COUNT(*) AS count
+      FROM items
+      GROUP BY category
+    `).all();
+
+    return rows.map((row) => {
+      const key = row.category || "unknown";
+      const cfg = CATEGORY_CONFIGS.find((c) => c.key === key);
+
+      return {
+        key,
+        label: cfg ? cfg.label : (key || "Inconnu"),
+        count: row.count || 0,
+      };
+    });
+  } catch (err) {
+    logError("STATS_CAT", `Erreur getCategoryCounts: ${err.message}`);
+    return [];
+  }
+}
 
 async function countPosterFiles() {
   try {
@@ -716,7 +782,6 @@ async function countPosterFiles() {
     for (const entry of entries) {
       if (!entry.isFile()) continue;
 
-      // On ne compte que les images "classiques"
       if (/\.(jpg|jpeg|png|webp|gif)$/i.test(entry.name)) {
         total++;
       }
@@ -1086,6 +1151,7 @@ function timestampFromYggDate(str) {
 // ============================================================================
 
 async function tmdbSearch(pathUrl, params) {
+  incTmdbCalls();
   const url = new URL(`${TMDB_BASE_URL}${pathUrl}`);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") {
@@ -1303,6 +1369,8 @@ async function igdbSearchGame(title) {
   const token = await getIgdbToken();
   if (!token) return null;
 
+  incIgdbCalls();
+
   const safeTitle = title.replace(/"/g, '\\"');
 
   const query = [
@@ -1506,14 +1574,12 @@ async function syncCategory(catKey) {
         try {
           let remotePoster = null;
 
-          // 1) On récupère l'URL distante (TMDB ou IGDB) comme avant
           if (normCat === "games") {
             remotePoster = await fetchIgdbCoverForTitle(rawTitle);
           } else if (TMDB_API_KEY) {
             remotePoster = await fetchPosterForTitle(rawTitle, normCat);
           }
 
-          // 2) Si on a une URL distante, on force le cache local tout de suite
           if (remotePoster) {
             const cacheParams = buildPosterCacheParamsFromItem({
               category: normCat,
@@ -1522,7 +1588,6 @@ async function syncCategory(catKey) {
 
             if (cacheParams) {
               const localUrl = await ensureLocalPoster(cacheParams);
-              // On stocke l'URL locale si dispo, sinon on retombe sur l'URL distante
               poster = localUrl || remotePoster;
             } else {
               poster = remotePoster;
@@ -1737,6 +1802,12 @@ async function syncAllCategories() {
 
   lastSyncAt = new Date().toISOString();
 
+  try {
+    await recordDailyStats();
+  } catch (err) {
+    logError("STATS_DAILY", `Erreur lors de recordDailyStats: ${err.message}`);
+  }
+
   return {
     summary,
     purged: purgedCount,
@@ -1796,7 +1867,6 @@ app.get("/api/config/sync-interval", (req, res) => {
 });
 
 app.post("/api/config/sync-interval", (req, res) => {
-  // On accepte JSON { minutes: ... } ou ?minutes=
   const raw =
     (req.body && (req.body.minutes ?? req.body.value)) ??
     req.query.minutes;
@@ -1804,7 +1874,7 @@ app.post("/api/config/sync-interval", (req, res) => {
   let minutes;
 
   if (typeof raw === "string" && raw.toLowerCase() === "manual") {
-    minutes = 0; // 0 = mode manuel (pas de sync auto)
+    minutes = 0;
   } else {
     minutes = Number(raw);
   }
@@ -1816,10 +1886,7 @@ app.post("/api/config/sync-interval", (req, res) => {
     });
   }
 
-  // Persistance BDD
   saveSyncIntervalToDb(minutes);
-
-  // Reprogrammation du scheduler
   schedulePeriodicSync(minutes);
 
   logInfo(
@@ -2012,6 +2079,67 @@ function selectFavoritesFromDb(sort, limitParam) {
   return stmt.all(...params);
 }
 
+const countItemsByCategoryStmt = db.prepare(`
+  SELECT category, COUNT(*) AS cnt
+  FROM items
+  GROUP BY category
+`);
+
+const upsertStatsDailyStmt = db.prepare(`
+  INSERT INTO stats_daily (
+    date_key,
+    db_size_bytes,
+    posters_count,
+    items_total,
+    items_film,
+    items_series,
+    items_emissions,
+    items_spectacle,
+    items_animation,
+    items_games,
+    tmdb_calls,
+    igdb_calls,
+    created_at
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(date_key) DO UPDATE SET
+    db_size_bytes   = excluded.db_size_bytes,
+    posters_count   = excluded.posters_count,
+    items_total     = excluded.items_total,
+    items_film      = excluded.items_film,
+    items_series    = excluded.items_series,
+    items_emissions = excluded.items_emissions,
+    items_spectacle = excluded.items_spectacle,
+    items_animation = excluded.items_animation,
+    items_games     = excluded.items_games,
+    tmdb_calls      = excluded.tmdb_calls,
+    igdb_calls      = excluded.igdb_calls,
+    created_at      = excluded.created_at
+`);
+
+let tmdbCallCountToday = 0;
+let igdbCallCountToday = 0;
+let currentStatsDateKey = getTodayKey();
+
+function resetApiCountersIfNewDay() {
+  const today = getTodayKey();
+  if (today !== currentStatsDateKey) {
+    currentStatsDateKey = today;
+    tmdbCallCountToday = 0;
+    igdbCallCountToday = 0;
+    logInfo("STATS_API", `Changement de jour → remise à zéro des compteurs API`);
+  }
+}
+
+function incTmdbCalls(n = 1) {
+  resetApiCountersIfNewDay();
+  tmdbCallCountToday += n;
+}
+
+function incIgdbCalls(n = 1) {
+  resetApiCountersIfNewDay();
+  igdbCallCountToday += n;
+}
+
 // ============================================================================
 // API LOGS (popup "Logs")
 // ============================================================================
@@ -2176,6 +2304,7 @@ app.post("/api/items/:guid/edit", (req, res) => {
 
 app.get("/api/details", async (req, res) => {
   try {
+    incTmdbCalls(2);
     const rawTitle = (req.query.title || "").toString().trim();
     const category = (req.query.category || "film").toString();
     const yearHint = req.query.year ? parseInt(req.query.year, 10) : undefined;
@@ -2434,11 +2563,9 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
 
     try {
       if (isGame) {
-        // on vide le cache pour forcer une nouvelle recherche
         const cacheKey = `games::${searchTitle.toLowerCase()}`;
         posterCache.delete(cacheKey);
 
-        // igdb retourne une URL distante (pas de cache local pour l’instant)
         const remoteCover = await fetchIgdbCoverForTitle(searchTitle);
         if (remoteCover) {
           newPoster = remoteCover;
@@ -2447,7 +2574,6 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
         const cacheKey = `${normCat || "any"}::${searchTitle.toLowerCase()}`;
         posterCache.delete(cacheKey);
 
-        // fetchPosterForTitle gère déjà le cache local (/posters/...)
         newPoster = await fetchPosterForTitle(searchTitle, normCat);
       }
     } catch (e) {
@@ -2495,6 +2621,78 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
   }
 });
 
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getItemsCountsByCategory() {
+  const rows = countItemsByCategoryStmt.all();
+  const map = {
+    film: 0,
+    series: 0,
+    emissions: 0,
+    spectacle: 0,
+    animation: 0,
+    games: 0,
+  };
+
+  let total = 0;
+
+  for (const row of rows) {
+    const key = normalizeCategoryKey(row.category || "");
+    const cnt = Number(row.cnt) || 0;
+    total += cnt;
+
+    if (key in map) {
+      map[key] += cnt;
+    }
+  }
+
+  return { total, ...map };
+}
+
+async function recordDailyStats() {
+  const dateKey = getTodayKey();
+  const nowTs = Date.now();
+
+  let dbSizeBytes = 0;
+  try {
+    const st = fs.statSync(DB_PATH);
+    dbSizeBytes = st.size || 0;
+  } catch (err) {
+    logError("STATS_DAILY", `Erreur stat DB: ${err.message}`);
+  }
+
+  const postersCount = await countPosterFiles();
+
+  const counts = getItemsCountsByCategory();
+
+  try {
+    upsertStatsDailyStmt.run(
+      dateKey,
+      dbSizeBytes,
+      postersCount,
+      counts.total,
+      counts.film,
+      counts.series,
+      counts.emissions,
+      counts.spectacle,
+      counts.animation,
+      counts.games,
+      tmdbCallCountToday,
+      igdbCallCountToday,
+      nowTs
+    );
+
+    logInfo(
+      "STATS_DAILY",
+      `Stats enregistrées pour ${dateKey} | DB=${dbSizeBytes} bytes, posters=${postersCount}, items=${counts.total}, TMDB=${tmdbCallCountToday}, IGDB=${igdbCallCountToday}`
+    );
+  } catch (err) {
+    logError("STATS_DAILY", `Erreur upsert stats_daily: ${err.message}`);
+  }
+}
+
 // ============================================================================
 // API STATS AFFICHES (compteur pour les settings)
 // ============================================================================
@@ -2512,6 +2710,126 @@ app.get("/api/posters/stats", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Erreur pendant le comptage des affiches",
+    });
+  }
+});
+
+// ============================================================================
+// API STATS GLOBALES (pour le popup "Statistiques")
+// ============================================================================
+
+app.get("/api/stats", async (req, res) => {
+  try {
+    const now = new Date();
+    const dateLabel = now.toISOString().slice(0, 10);
+
+    const dbSizeMb = getDbSizeMb();
+    const postersCount = await countPosterFiles();
+    const categoryCounts = getCategoryCounts();
+
+    return res.json({
+      dbSizeHistory: [
+        {
+          date: dateLabel,
+          sizeMb: dbSizeMb,
+        },
+      ],
+      postersHistory: [
+        {
+          date: dateLabel,
+          count: postersCount,
+        },
+      ],
+      categoryCounts,
+    });
+  } catch (err) {
+    logError("STATS_API", `Erreur /api/stats: ${err.message}`);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur lors du calcul des statistiques",
+    });
+  }
+});
+
+// ============================================================================
+// API STATS DAILY (pour les graphiques)
+// ============================================================================
+
+app.get("/api/stats/daily", (req, res) => {
+  try {
+    let range = (req.query.range || "7").toString().toLowerCase();
+
+    if (!["7", "30", "all"].includes(range)) {
+      range = "7";
+    }
+
+    let whereClause = "";
+    const params = [];
+
+    if (range !== "all") {
+      const days = Number(range);
+      const now = new Date();
+      const fromDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const fromKey = fromDate.toISOString().slice(0, 10);
+
+      whereClause = "WHERE date_key >= ?";
+      params.push(fromKey);
+    }
+
+    const sql = `
+      SELECT
+        date_key,
+        db_size_bytes,
+        posters_count,
+        items_total,
+        items_film,
+        items_series,
+        items_emissions,
+        items_spectacle,
+        items_animation,
+        items_games,
+        tmdb_calls,
+        igdb_calls
+      FROM stats_daily
+      ${whereClause}
+      ORDER BY date_key ASC
+    `;
+
+    const rows = db.prepare(sql).all(...params);
+
+    const points = rows.map((r) => {
+      const dbSizeMb = r.db_size_bytes
+        ? r.db_size_bytes / (1024 * 1024)
+        : 0;
+
+      return {
+        date: r.date_key,
+        dbSizeMb: Number(dbSizeMb.toFixed(2)),
+        postersCount: r.posters_count || 0,
+        items: {
+          total: r.items_total || 0,
+          film: r.items_film || 0,
+          series: r.items_series || 0,
+          emissions: r.items_emissions || 0,
+          spectacle: r.items_spectacle || 0,
+          animation: r.items_animation || 0,
+          games: r.items_games || 0,
+        },
+        tmdbCalls: r.tmdb_calls || 0,
+        igdbCalls: r.igdb_calls || 0,
+      };
+    });
+
+    return res.json({
+      ok: true,
+      range,
+      points,
+    });
+  } catch (err) {
+    logError("STATS_DAILY", `Erreur API /api/stats/daily: ${err.message}`);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur pendant la récupération des statistiques",
     });
   }
 });
