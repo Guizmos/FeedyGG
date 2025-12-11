@@ -1637,14 +1637,29 @@ async function updateStatsChart() {
     }
 
     let dailyData = null;
+
     if (currentStatsRange !== "live") {
       dailyData = await fetchDailyStats(currentStatsRange);
+    } else if (currentStatsMetric === "api-calls") {
+      dailyData = await fetchDailyStats("7");
     }
 
     renderStatsChart(currentStatsMetric, currentStatsRange, statsLiveData, dailyData);
   } catch (err) {
     console.error("Erreur chargement stats :", err);
   }
+}
+
+const API_PROVIDER_LABELS = {
+  tmdbcalls: "TMDB",
+  igdbcalls: "IGDB",
+  tmdb: "TMDB",
+  igdb: "IGDB",
+};
+
+function isApiProviderKey(raw) {
+  const k = (raw || "").toLowerCase();
+  return k === "tmdbcalls" || k === "igdbcalls" || k === "tmdb" || k === "igdb";
 }
 
 function renderStatsChart(metric, range, liveData, dailyData) {
@@ -1679,7 +1694,10 @@ function renderStatsChart(metric, range, liveData, dailyData) {
   let datasets = [];
   let type = "line";
 
-  // --- DB size / Posters -----------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 1) TAILLE BDD / POCHETTES
+  // ---------------------------------------------------------------------------
+
   if (metric === "db-size" || metric === "posters") {
     let points = [];
 
@@ -1691,8 +1709,13 @@ function renderStatsChart(metric, range, liveData, dailyData) {
       points = metric === "db-size" ? dbSizeHistoryLive : postersHistoryLive;
     }
 
+    if (!points || !points.length) {
+      return;
+    }
+
+    labels = points.map((p) => p.date || p.date_key || "Aujourd'hui");
+
     if (metric === "db-size") {
-      labels = points.map((p) => p.date || p.date_key || "Aujourd'hui");
       const dataValues = points.map((p) =>
         typeof p.dbSizeMb === "number" ? p.dbSizeMb : (p.sizeMb || 0)
       );
@@ -1707,7 +1730,6 @@ function renderStatsChart(metric, range, liveData, dailyData) {
         },
       ];
     } else {
-      labels = points.map((p) => p.date || p.date_key || "Aujourd'hui");
       const dataValues = points.map((p) =>
         typeof p.postersCount === "number" ? p.postersCount : (p.count || 0)
       );
@@ -1723,47 +1745,32 @@ function renderStatsChart(metric, range, liveData, dailyData) {
       ];
     }
 
-    type = "line";
+    type = range === "live" ? "bar" : "line";
   }
 
-  // --- Répartition par catégories -------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 2) RÉPARTITION PAR CATÉGORIE
+  // ---------------------------------------------------------------------------
+  
   else if (metric === "categories") {
     const items = categoryCountsLive;
 
-    labels = items.map((c) => c.label);
-    const dataValues = items.map((c) => c.count || 0);
-
-    datasets = [
-      {
-        label: "Cartes disponibles (aujourd'hui)",
-        data: dataValues,
-        borderWidth: 2,
-        pointRadius: 0,
-      },
-    ];
-
-    type = "bar";
-  }
-
-  // --- Appels API externes (TMDB / IGDB / etc.) ------------------------------
-  else if (metric === "api-calls") {
-    // Mode "live" → on affiche un bar chart par provider (TMDB, IGDB, …)
     if (
       range === "live" ||
       !dailyData ||
       !Array.isArray(dailyData.points) ||
       !dailyData.points.length
     ) {
-      const items = apiCallsTodayLive.length
-        ? apiCallsTodayLive
-        : []; // fallback éventuel
+      if (!items || !items.length) {
+        return;
+      }
 
-      labels = items.map((p) => p.label || p.provider || "—");
-      const dataValues = items.map((p) => Number(p.count) || 0);
+      labels = items.map((c) => c.label);
+      const dataValues = items.map((c) => c.count || 0);
 
       datasets = [
         {
-          label: "Appels API (dernière période)",
+          label: "Cartes disponibles (aujourd'hui)",
           data: dataValues,
           borderWidth: 2,
           pointRadius: 0,
@@ -1771,17 +1778,113 @@ function renderStatsChart(metric, range, liveData, dailyData) {
       ];
 
       type = "bar";
+    }
+
+    else {
+    const points = Array.isArray(dailyData.points) ? dailyData.points : [];
+    if (!points.length) return;
+
+    labels = points.map((p) => p.date || p.date_key || "Jour");
+
+    const categoryKeys = ["film", "series", "emissions", "spectacle", "animation", "games"];
+
+    const categoryDatasets = categoryKeys
+      .map((key) => {
+        const data = points.map((p) => {
+          const items = p.items || {};
+          return Number(items[key] || 0);
+        });
+
+        const hasValues = data.some((v) => v > 0);
+        if (!hasValues) return null;
+
+        const label = CATEGORY_LABELS[key] || key;
+        return {
+          label,
+          data,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 3,
+        };
+      })
+      .filter(Boolean);
+
+    if (categoryDatasets.length) {
+      datasets = categoryDatasets;
+      type = "line";
     } else {
-      // Mode "7 / 30 / all" → on fait un multi-dataset (une courbe par provider)
+      const dataValues = points.map((p) => {
+        const items = p.items || {};
+        return Number(items.total || 0);
+      });
+
+      datasets = [
+        {
+          label: "Total des cartes (période)",
+          data: dataValues,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 3,
+        },
+      ];
+
+      type = "line";
+    }
+  }
+
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3) APPELS API TMDB / IGDB
+  // ---------------------------------------------------------------------------
+
+  else if (metric === "api-calls") {
+    const hasDaily =
+      dailyData && Array.isArray(dailyData.points) && dailyData.points.length;
+
+    if (range === "live") {
+      let items = Array.isArray(apiCallsTodayLive) ? apiCallsTodayLive : [];
+
+      if ((!items || !items.length) && hasDaily) {
+        const points = dailyData.points;
+        const lastPoint = points[points.length - 1];
+
+        const providerKeys = Object.keys(lastPoint).filter((key) => {
+          if (key === "date" || key === "date_key") return false;
+          const k = key.toLowerCase();
+          return k.includes("tmdb") || k.includes("igdb");
+        });
+
+        items = providerKeys.map((key) => ({
+          label: key.toUpperCase(),
+          count: Number(lastPoint[key]) || 0,
+        }));
+      }
+
+      labels = items.map((p) => p.label || p.provider || "—");
+      const dataValues = items.map((p) => Number(p.count) || 0);
+
+      datasets = [
+        {
+          label: "Appels API (aujourd'hui)",
+          data: dataValues,
+          borderWidth: 2,
+          pointRadius: 0,
+        },
+      ];
+
+      type = "bar";
+    } else if (hasDaily) {
       const points = dailyData.points;
 
       labels = points.map((p) => p.date || p.date_key || "Jour");
 
       const providerKeys = new Set();
-
       points.forEach((p) => {
         Object.keys(p).forEach((key) => {
           if (key === "date" || key === "date_key") return;
+          const k = key.toLowerCase();
+          if (!k.includes("tmdb") && !k.includes("igdb")) return;
           providerKeys.add(key);
         });
       });
@@ -1795,8 +1898,65 @@ function renderStatsChart(metric, range, liveData, dailyData) {
       }));
 
       type = "line";
+    } else {
+      labels = [];
+      datasets = [];
+      type = "bar";
     }
   }
+
+  const allValues = datasets
+    .flatMap((ds) => Array.isArray(ds.data) ? ds.data : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v));
+
+  let yMin = 0;
+  let yMax = 1;
+
+  if (allValues.length) {
+    const minVal = Math.min(...allValues);
+    const maxVal = Math.max(...allValues);
+
+    const isCountMetric =
+      metric === "posters" ||
+      metric === "categories" ||
+      metric === "api-calls";
+
+    if (isCountMetric) {
+      yMin = 0;
+
+      if (maxVal <= 0) {
+        yMax = 1;
+      } else if (maxVal <= 10) {
+        yMax = 10;
+      } else {
+        yMax = Math.ceil(maxVal * 1.1);
+      }
+    } else {
+      if (maxVal === minVal) {
+        yMin = Math.max(0, minVal - 1);
+        yMax = minVal + 1;
+      } else {
+        const padding = (maxVal - minVal) * 0.15;
+        yMin = Math.max(0, minVal - padding);
+        yMax = maxVal + padding;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Construction du chart
+  // ---------------------------------------------------------------------------
+  if (!labels.length || !datasets.length) {
+    return;
+  }
+
+  const isLightTheme = document.body.classList.contains("theme-light");
+  const legendColor = isLightTheme ? "#374151" : "#e5e7eb";
+  const ticksColor  = isLightTheme ? "#4b5563" : "#9ca3af";
+  const gridColor   = isLightTheme
+    ? "rgba(148,163,184,0.35)"
+    : "rgba(148,163,253,0.15)";
 
   statsChart = new Chart(ctx, {
     type,
@@ -1810,29 +1970,48 @@ function renderStatsChart(metric, range, liveData, dailyData) {
       plugins: {
         legend: {
           labels: {
-            color: "#e5e7eb",
+            color: legendColor,
           },
         },
       },
-      scales: {
-        x: {
-          ticks: {
-            color: "#9ca3af",
-          },
-          grid: {
-            display: false,
-          },
-        },
-        y: {
-          ticks: {
-            color: "#9ca3af",
-          },
-          grid: {
-            color: "rgba(148,163,253,0.15)",
-          },
-          beginAtZero: true,
-        },
-      },
+      scales:
+        type === "bar" || type === "line"
+          ? {
+              x: {
+                ticks: {
+                  color: ticksColor,
+                },
+                grid: {
+                  display: false,
+                },
+              },
+              y: {
+                ticks: {
+                  color: ticksColor,
+                  callback: function (value) {
+                    if (
+                      metric === "posters" ||
+                      metric === "categories" ||
+                      metric === "api-calls"
+                    ) {
+                      return Math.round(value).toLocaleString("fr-FR");
+                    }
+                    if (metric === "db-size") {
+                      const v = Number(value);
+                      if (!Number.isFinite(v)) return value;
+                      return v.toFixed(2).replace(".", ",");
+                    }
+                    return value;
+                  },
+                },
+                grid: {
+                  color: gridColor,
+                },
+                min: yMin,
+                max: yMax,
+              },
+            }
+          : {},
     },
   });
 }
@@ -2531,7 +2710,6 @@ statsRangeTabs.forEach((tab) => {
 
       refreshIntervalSelect.value = selectValue;
       autosizeSelect(refreshIntervalSelect);
-      refreshIntervalSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
       scheduleAutoRefresh(minutes);
     } catch (err) {

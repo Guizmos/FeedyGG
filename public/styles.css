@@ -3120,16 +3120,22 @@ body.no-scroll {
   .details-layout {
     flex-direction: column;
     align-items: center;
+    gap: 2px;
   }
 
   .details-poster-shell {
     flex: 0 0 auto;
   }
 
+  .details-content {
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+
   .details-poster,
   .details-poster-fallback {
-    width: 180px;
-    height: 260px;
+    width: 220px;
+    height: 320px;
   }
 
   .details-title {
@@ -3263,7 +3269,7 @@ body.no-scroll {
   }
 
   .settings-modal.details-modal {
-    height: calc(100vh - 24px);
+    height: auto;
     max-height: calc(100vh - 24px);
     overflow-y: auto;
   }
@@ -3309,6 +3315,99 @@ body.no-scroll {
 
   .theme-light .settings-sidebar {
     border-bottom-color: rgba(148, 163, 184, 0.35);
+  }
+
+  #stats-modal.settings-modal {
+    width: calc(100% - 16px);
+    max-width: 100%;
+    height: auto;
+    max-height: calc(100vh - 24px);
+  }
+
+  .stats-modal-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .stats-metric-group,
+  .stats-range-toolbar {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .stats-tab,
+  .stats-range-tab {
+    flex: 1 1 calc(50% - 6px);
+    padding: 5px 8px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .stats-chart-shell {
+    padding: 6px 6px;
+  }
+
+  .stats-chart-shell canvas {
+    height: 260px !important;
+  }
+
+  .details-title {
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: clip !important;
+    display: block !important;
+    width: 100% !important;
+    font-size: 1rem;
+    line-height: 1.25;
+
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .details-original-toggle {
+    align-self: flex-end !important;
+    margin-top: 2px;
+  }
+
+  .details-title-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  /* Bouton i = premier élément */
+  .details-original-toggle {
+    order: 0;
+    align-self: flex-end;      /* positionné à droite */
+    margin: 0 !important;         /* retire toute marge */
+    padding: 2px 4px !important;  /* minuscule padding pour garder le clic */
+    line-height: 1 !important;    /* réduit la hauteur */
+    height: auto !important;      /* supprime une éventuelle hauteur forcée */
+
+    transform: translateY(10px);
+  }
+
+  /* Titre affiché normalement */
+  .details-title {
+    order: 1;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: clip !important;
+    display: block !important;
+    width: 100% !important;
+    font-size: 1.15rem;
+    line-height: 1.25;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
   }
 }
 
