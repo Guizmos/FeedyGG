@@ -2828,9 +2828,10 @@ button:focus {
 }
 
 body.no-scroll {
-  height: 100vh;
+  position: fixed;
+  width: 100%;
   overflow: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
 }
 
 .settings-footer {

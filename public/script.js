@@ -167,6 +167,29 @@ document.addEventListener("DOMContentLoaded", () => {
   let sortDirection = "desc";
   let currentSearch = "";
 
+// ---------------------------------------------------------------------------
+// Scroll lock (gère plusieurs modals ouverts)
+// ---------------------------------------------------------------------------
+
+let scrollLockCount = 0;
+
+function lockScroll() {
+  scrollLockCount += 1;
+  document.body.classList.add("no-scroll");
+}
+
+function unlockScroll() {
+  scrollLockCount = Math.max(0, scrollLockCount - 1);
+  if (scrollLockCount === 0) {
+    document.body.classList.remove("no-scroll");
+  }
+}
+
+function resetScrollLock() {
+  scrollLockCount = 0;
+  document.body.classList.remove("no-scroll");
+}
+
   const feedState = {
     mode: "single",
     categoryLabel: "",
@@ -901,12 +924,13 @@ document.addEventListener("DOMContentLoaded", () => {
   async function refreshPosterForItem(item, buttonEl) {
     if (!item || !item.guid) return;
 
-    const guid = item.guid;
-    const encoded = encodeURIComponent(guid);
+    const safeBtn = buttonEl || { disabled: false, textContent: "" };
+    const oldText = safeBtn.textContent;
 
-    const oldText = buttonEl.textContent;
-    buttonEl.disabled = true;
-    buttonEl.textContent = "Rafraîchissement…";
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = "Rafraîchissement…";
+    }
 
     try {
       const res = await fetch(`/api/posters/refresh/${encoded}`, {
@@ -933,8 +957,10 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Erreur refreshPosterForItem:", err);
       alert("Impossible de rafraîchir la pochette pour le moment.");
     } finally {
-      buttonEl.disabled = false;
-      buttonEl.textContent = oldText;
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = oldText;
+      }
     }
   }
 
@@ -954,7 +980,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     overlay.classList.remove("hidden");
     modal.classList.add("show");
-    document.body.classList.add("no-scroll");
+    lockScroll();
 
     input.focus();
     input.select();
@@ -965,7 +991,7 @@ document.addEventListener("DOMContentLoaded", () => {
     cancelBtn.onclick = () => {
       overlay.classList.add("hidden");
       modal.classList.remove("show");
-      document.body.classList.remove("no-scroll");
+      unlockScroll();
     };
 
     saveBtn.onclick = async () => {
@@ -987,7 +1013,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         overlay.classList.add("hidden");
         modal.classList.remove("show");
-        document.body.classList.remove("no-scroll");
+        unlockScroll();
         await loadFeed({ useMinSkeleton: false });
       } catch (err) {
         console.error("Erreur réseau sauvegarde titre:", err);
@@ -1494,7 +1520,7 @@ document.addEventListener("DOMContentLoaded", () => {
     overlay.classList.remove("hidden");
     modal.classList.remove("hidden");
     requestAnimationFrame(() => modal.classList.add("show"));
-    document.body.classList.add("no-scroll");
+    lockScroll();
     refreshPostersCount();
     updateLastSyncStatus();
   }
@@ -1505,7 +1531,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       overlay.classList.add("hidden");
       modal.classList.add("hidden");
-      document.body.classList.remove("no-scroll");
+      unlockScroll();
     }, 200);
   }
 
@@ -1579,7 +1605,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logsOverlay.classList.remove("hidden");
     logsModal.classList.remove("hidden");
     requestAnimationFrame(() => logsModal.classList.add("show"));
-    document.body.classList.add("no-scroll");
+    lockScroll();
     loadLogs();
   }
 
@@ -1590,7 +1616,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       logsOverlay.classList.add("hidden");
       logsModal.classList.add("hidden");
-      document.body.classList.remove("no-scroll");
+      unlockScroll();
 
       if (modal) {
         modal.classList.remove("settings-modal-behind-logs");
@@ -2022,7 +2048,7 @@ function openStatsModal() {
   statsOverlay.classList.remove("hidden");
   statsModal.classList.remove("hidden");
   requestAnimationFrame(() => statsModal.classList.add("show"));
-  document.body.classList.add("no-scroll");
+  lockScroll();
 
   currentStatsMetric = "db-size";
   currentStatsRange = "live";
@@ -2049,7 +2075,7 @@ function closeStatsModal() {
   setTimeout(() => {
     statsOverlay.classList.add("hidden");
     statsModal.classList.add("hidden");
-    document.body.classList.remove("no-scroll");
+    unlockScroll();
   }, 200);
 }
 
@@ -2109,7 +2135,7 @@ statsRangeTabs.forEach((tab) => {
     setTimeout(() => {
       detailsOverlay.classList.add("hidden");
       detailsModal.classList.add("hidden");
-      document.body.classList.remove("no-scroll");
+      unlockScroll();
     }, 200);
   }
 
@@ -2276,7 +2302,7 @@ statsRangeTabs.forEach((tab) => {
     detailsOverlay.classList.remove("hidden");
     detailsModal.classList.remove("hidden");
     requestAnimationFrame(() => detailsModal.classList.add("show"));
-    document.body.classList.add("no-scroll");
+    lockScroll();
 
     fetchAndFillDetails(item, effectiveCat);
   }
