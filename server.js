@@ -54,6 +54,7 @@ const DEFAULT_RETENTION_DAYS = 7;
 let retentionDays = DEFAULT_RETENTION_DAYS;
 
 let lastSyncAt = null;
+let isSyncRunning = false;
 
 const posterCache = new Map();
 
@@ -99,9 +100,7 @@ function rotateLogsIfNeeded() {
     const tail = lines.slice(-1000);
 
     fs.writeFileSync(LOG_FILE, tail.join("\n") + "\n", "utf8");
-    console.log(
-      `[LOGS] Rotation effectuée, fichier tronqué à ${tail.length} lignes`
-    );
+    console.log(`[LOGS] Rotation effectuée, fichier tronqué à ${tail.length} lignes`);
   } catch (e) {
     console.error("[LOGS] Erreur rotation:", e.message);
   }
@@ -254,8 +253,22 @@ try {
   }
 }
 
+try {
+  db.exec(`ALTER TABLE items ADD COLUMN poster_ref TEXT`);
+} catch (e) {
+  if (!String(e.message || "").includes("duplicate column")) {
+    logError("DB_MIGRATE", `Erreur ajout colonne items.poster_ref: ${e.message}`);
+  }
+}
+
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_items_poster_ref ON items(poster_ref)`);
+} catch (e) {
+  logError("DB_MIGRATE", `Erreur index idx_items_poster_ref: ${e.message}`);
+}
+
 // ============================================================================
-// SETTINGS GLOBAUX (table settings) + intervalle de sync
+// SETTINGS GLOBAUX (table settings) + intervalle de sync + retention + lastSyncAt
 // ============================================================================
 
 const getSettingStmt = db.prepare(`
@@ -277,9 +290,7 @@ function loadSyncIntervalFromDb() {
     const row = getSettingStmt.get("sync_interval_minutes");
     if (row && row.value != null) {
       const v = Number(row.value);
-      if (Number.isFinite(v)) {
-        return v;
-      }
+      if (Number.isFinite(v)) return v;
     }
   } catch (err) {
     logError("SETTINGS", `Erreur lecture sync_interval_minutes: ${err.message}`);
@@ -301,9 +312,7 @@ function loadRetentionDaysFromDb() {
     const row = getSettingStmt.get("retention_days");
     if (row && row.value != null) {
       const v = Number(row.value);
-      if (Number.isFinite(v) && v > 0) {
-        return v;
-      }
+      if (Number.isFinite(v) && v > 0) return v;
     }
   } catch (err) {
     logError("SETTINGS", `Erreur lecture retention_days: ${err.message}`);
@@ -317,6 +326,35 @@ function saveRetentionDaysToDb(days) {
     upsertSettingStmt.run("retention_days", String(days), now);
   } catch (err) {
     logError("SETTINGS", `Erreur écriture retention_days: ${err.message}`);
+  }
+}
+
+// ✅ NOUVEAU : lastSyncAt persisté en DB (settings)
+function loadLastSyncAtFromDb() {
+  try {
+    const row = getSettingStmt.get("last_sync_at");
+    if (row && row.value) return String(row.value);
+  } catch (err) {
+    logError("SETTINGS", `Erreur lecture last_sync_at: ${err.message}`);
+  }
+  return null;
+}
+
+function saveLastSyncAtToDb(isoString) {
+  const now = Date.now();
+  try {
+    upsertSettingStmt.run("last_sync_at", String(isoString), now);
+  } catch (err) {
+    logError("SETTINGS", `Erreur écriture last_sync_at: ${err.message}`);
+  }
+}
+
+async function cleanupPostersJob() {
+  try {
+    const result = cleanupPosterOrphans();
+    logInfo("POSTERS_CLEANUP", `Auto-cleanup: DB=${result.dbRemoved}, FS=${result.fsRemoved}`);
+  } catch (err) {
+    logError("POSTERS_CLEANUP", `Erreur auto-cleanup: ${err.message}`);
   }
 }
 
@@ -346,6 +384,22 @@ function schedulePeriodicSync(minutes) {
       logError("SYNC_PERIODIC", `Erreur: ${e.message}`)
     );
   }, ms);
+}
+
+function scheduleDailyPosterCleanup() {
+  const now = new Date();
+
+  const nextMidnight = new Date();
+  nextMidnight.setHours(24, 0, 0, 0);
+
+  const delay = nextMidnight.getTime() - now.getTime();
+
+  console.log(`[CLEANUP] Premier nettoyage programmé dans ${Math.round(delay / 1000)}s`);
+
+  setTimeout(() => {
+    cleanupPostersJob();
+    setInterval(cleanupPostersJob, 24 * 60 * 60 * 1000);
+  }, delay);
 }
 
 // ============================================================================
@@ -381,10 +435,10 @@ const deletePosterStmt = db.prepare(`
     AND external_id = ?
 `);
 
-const countItemsUsingPosterStmt = db.prepare(`
+const countItemsUsingPosterRefStmt = db.prepare(`
   SELECT COUNT(*) AS cnt
   FROM items
-  WHERE poster LIKE ?
+  WHERE poster_ref = ?
 `);
 
 // ============================================================================
@@ -432,14 +486,6 @@ function buildPosterFileName(provider, mediaType, externalId) {
 
 /**
  * Garantit la présence d'une affiche en local et renvoie l'URL /posters/...
- *
- * @param {Object} params
- * @param {string} params.provider
- * @param {string} params.mediaType
- * @param {string|number} params.externalId
- * @param {string} [params.remoteUrl]
- *
- * @returns {Promise<string|null>}
  */
 async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl }) {
   if (!provider || !mediaType || externalId == null) {
@@ -496,9 +542,7 @@ async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl })
   const absPath = path.join(POSTERS_DIR, fileName);
 
   const ok = await downloadImageToFile(remoteUrl, absPath);
-  if (!ok) {
-    return null;
-  }
+  if (!ok) return null;
 
   try {
     insertPosterStmtLocal.run(
@@ -528,62 +572,45 @@ async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl })
 // ============================================================================
 
 function cleanupPostersAfterItemsPurge(deletedItems) {
-  if (!Array.isArray(deletedItems) || deletedItems.length === 0) {
-    return;
-  }
+  if (!Array.isArray(deletedItems) || deletedItems.length === 0) return;
 
   const posterKeyMap = new Map();
 
   for (const row of deletedItems) {
     if (!row || !row.poster) continue;
 
-    const itemLike = {
-      category: row.category,
-      poster: row.poster,
-    };
-
+    const itemLike = { category: row.category, poster: row.poster };
     const params = buildPosterCacheParamsFromItem(itemLike);
     if (!params) continue;
 
     const { provider, mediaType, externalId } = params;
     const keyStr = `${provider}||${mediaType}||${externalId}`;
 
-    if (!posterKeyMap.has(keyStr)) {
-      posterKeyMap.set(keyStr, params);
-    }
+    if (!posterKeyMap.has(keyStr)) posterKeyMap.set(keyStr, params);
   }
 
-  if (posterKeyMap.size === 0) {
-    return;
-  }
+  if (posterKeyMap.size === 0) return;
 
   for (const params of posterKeyMap.values()) {
-    const { provider, mediaType, externalId, remoteUrl } = params;
+    const { provider, mediaType, externalId } = params;
     const externalIdKey = String(externalId);
 
     let remaining = 0;
     try {
-      const row = countItemsUsingPosterStmt.get(`%${externalIdKey}%`);
+      const posterRef = makePosterRef(provider, mediaType, externalIdKey);
+      const row = countItemsUsingPosterRefStmt.get(posterRef);
       remaining = row ? row.cnt : 0;
     } catch (err) {
-      logError(
-        "POSTERS_PURGE",
-        `Erreur countItemsUsingPoster pour externalId=${externalIdKey}: ${err.message}`
-      );
+      logError("POSTERS_PURGE", `Erreur countItemsUsingPoster pour externalId=${externalIdKey}: ${err.message}`);
       continue;
     }
 
-    if (remaining > 0) {
-      continue;
-    }
+    if (remaining > 0) continue;
 
     try {
       deletePosterStmt.run(provider, mediaType, externalIdKey);
     } catch (err) {
-      logError(
-        "POSTERS_PURGE",
-        `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`
-      );
+      logError("POSTERS_PURGE", `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`);
     }
 
     const fileName = buildPosterFileName(provider, mediaType, externalIdKey);
@@ -592,16 +619,10 @@ function cleanupPostersAfterItemsPurge(deletedItems) {
     try {
       if (fs.existsSync(absPath)) {
         fs.unlinkSync(absPath);
-        logInfo(
-          "POSTERS_PURGE",
-          `Affiche supprimée: ${absPath} (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey})`
-        );
+        logInfo("POSTERS_PURGE", `Affiche supprimée: ${absPath} (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey})`);
       }
     } catch (err) {
-      logError(
-        "POSTERS_PURGE",
-        `Erreur suppression fichier d'affiche ${absPath}: ${err.message}`
-      );
+      logError("POSTERS_PURGE", `Erreur suppression fichier d'affiche ${absPath}: ${err.message}`);
     }
   }
 }
@@ -618,9 +639,11 @@ function cleanupPosterOrphans() {
     const orphanRowsStmt = db.prepare(`
       SELECT p.provider, p.media_type, p.external_id, p.file_path
       FROM posters p
-      LEFT JOIN items i
-        ON i.poster LIKE '%' || p.external_id || '%'
-      WHERE i.guid IS NULL
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM items i
+        WHERE i.poster_ref = (p.provider || '|' || p.media_type || '|' || p.external_id)
+      )
     `);
 
     const orphanRows = orphanRowsStmt.all() || [];
@@ -635,10 +658,7 @@ function cleanupPosterOrphans() {
         deletePosterStmt.run(provider, mediaType, externalIdKey);
         dbRemoved++;
       } catch (err) {
-        logError(
-          "POSTERS_CLEANUP",
-          `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`
-        );
+        logError("POSTERS_CLEANUP", `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`);
       }
 
       if (filePathRel) {
@@ -647,16 +667,10 @@ function cleanupPosterOrphans() {
           if (fs.existsSync(absPath)) {
             fs.unlinkSync(absPath);
             fsRemoved++;
-            logInfo(
-              "POSTERS_CLEANUP",
-              `Fichier d'affiche supprimé (orphelin DB): ${absPath}`
-            );
+            logInfo("POSTERS_CLEANUP", `Fichier d'affiche supprimé (orphelin DB): ${absPath}`);
           }
         } catch (err) {
-          logError(
-            "POSTERS_CLEANUP",
-            `Erreur suppression fichier d'affiche (orphelin DB) ${absPath}: ${err.message}`
-          );
+          logError("POSTERS_CLEANUP", `Erreur suppression fichier d'affiche (orphelin DB) ${absPath}: ${err.message}`);
         }
       }
     }
@@ -681,40 +695,27 @@ function cleanupPosterOrphans() {
 
         const fileName = entry.name;
 
-        if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
-          continue;
-        }
+        if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) continue;
 
         let used = 0;
         try {
           const row = countByFilePathStmt.get(fileName);
           used = row ? row.cnt : 0;
         } catch (err) {
-          logError(
-            "POSTERS_CLEANUP",
-            `Erreur vérification utilisation fichier ${fileName}: ${err.message}`
-          );
+          logError("POSTERS_CLEANUP", `Erreur vérification utilisation fichier ${fileName}: ${err.message}`);
           continue;
         }
 
-        if (used > 0) {
-          continue;
-        }
+        if (used > 0) continue;
 
         const absPath = path.join(POSTERS_DIR, fileName);
 
         try {
           fs.unlinkSync(absPath);
           fsRemoved++;
-          logInfo(
-            "POSTERS_CLEANUP",
-            `Fichier d'affiche supprimé (orphelin FS): ${absPath}`
-          );
+          logInfo("POSTERS_CLEANUP", `Fichier d'affiche supprimé (orphelin FS): ${absPath}`);
         } catch (err) {
-          logError(
-            "POSTERS_CLEANUP",
-            `Erreur suppression fichier d'affiche (orphelin FS) ${absPath}: ${err.message}`
-          );
+          logError("POSTERS_CLEANUP", `Erreur suppression fichier d'affiche (orphelin FS) ${absPath}: ${err.message}`);
         }
       }
     }
@@ -722,10 +723,7 @@ function cleanupPosterOrphans() {
     logError("POSTERS_CLEANUP", `Erreur phase 2 (FS orphelin): ${err.message}`);
   }
 
-  logInfo(
-    "POSTERS_CLEANUP",
-    `Nettoyage orphelins terminé: ${dbRemoved} entrées DB supprimées, ${fsRemoved} fichiers supprimés`
-  );
+  logInfo("POSTERS_CLEANUP", `Nettoyage orphelins terminé: ${dbRemoved} entrées DB supprimées, ${fsRemoved} fichiers supprimés`);
 
   return { dbRemoved, fsRemoved };
 }
@@ -781,10 +779,7 @@ async function countPosterFiles() {
     let total = 0;
     for (const entry of entries) {
       if (!entry.isFile()) continue;
-
-      if (/\.(jpg|jpeg|png|webp|gif)$/i.test(entry.name)) {
-        total++;
-      }
+      if (/\.(jpg|jpeg|png|webp|gif)$/i.test(entry.name)) total++;
     }
 
     return total;
@@ -844,9 +839,7 @@ function getRssConfigForCategoryKey(catKey) {
   const key = normalizeCategoryKey(catKey);
   const id = RSS_CATEGORY_IDS[key];
 
-  if (!id) {
-    throw new Error(`No RSS ID configured for category "${key}"`);
-  }
+  if (!id) throw new Error(`No RSS ID configured for category "${key}"`);
 
   const url = `https://yggapi.eu/rss?id=${id}&passkey=${RSS_PASSKEY}`;
   return { id, url };
@@ -857,9 +850,7 @@ function getRssConfigForCategoryKey(catKey) {
 // ============================================================================
 
 function guessTitleAndYear(rawTitle = "", kind = "film") {
-  if (!rawTitle) {
-    return { cleanTitle: "", year: null };
-  }
+  if (!rawTitle) return { cleanTitle: "", year: null };
 
   let t = rawTitle;
 
@@ -888,60 +879,12 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
   }
 
   const tags = [
-    "HYBRID",
-    "MULTI",
-    "MULTI VF2",
-    "VF2",
-    "VFF",
-    "VFI",
-    "VOSTFR",
-    "TRUEFRENCH",
-    "FRENCH",
-    "WEBRIP",
-    "WEB",
-    "WEB DL",
-    "WEBDL",
-    "WEB-DL",
-    "NF",
-    "AMZN",
-    "HMAX",
-    "BLURAY",
-    "BDRIP",
-    "BRRIP",
-    "BR RIP",
-    "HDRIP",
-    "DVDRIP",
-    "HDTV",
-    "1080P",
-    "2160P",
-    "720P",
-    "4K",
-    "UHD",
-    "10BIT",
-    "8BIT",
-    "HDR",
-    "HDR10",
-    "HDR10PLUS",
-    "DOLBY VISION",
-    "DV",
-    "X264",
-    "X265",
-    "H264",
-    "H265",
-    "AV1",
-    "DDP5",
-    "DDP5.1",
-    "DDP",
-    "AC3",
-    "DTS",
-    "DTS HD",
-    "TRUEHD",
-    "ATMOS",
-    "THESYNDICATE",
-    "QTZ",
-    "SUPPLY",
-    "BTT",
-    "OUI",
+    "HYBRID","MULTI","MULTI VF2","VF2","VFF","VFI","VOSTFR","TRUEFRENCH","FRENCH",
+    "WEBRIP","WEB","WEB DL","WEBDL","WEB-DL","NF","AMZN","HMAX",
+    "BLURAY","BDRIP","BRRIP","BR RIP","HDRIP","DVDRIP","HDTV",
+    "1080P","2160P","720P","4K","UHD","10BIT","8BIT","HDR","HDR10","HDR10PLUS","DOLBY VISION","DV",
+    "X264","X265","H264","H265","AV1","DDP5","DDP5.1","DDP","AC3","DTS","DTS HD","TRUEHD","ATMOS",
+    "THESYNDICATE","QTZ","SUPPLY","BTT","OUI",
   ];
   const tagRegex = new RegExp(`\\b(${tags.join("|")})\\b`, "gi");
   name = name.replace(tagRegex, " ");
@@ -950,14 +893,9 @@ function guessTitleAndYear(rawTitle = "", kind = "film") {
   name = name.replace(/\s+/g, " ").trim();
 
   let cleanTitle = "";
-
-  if (name) {
-    cleanTitle = name;
-  } else if (!name && !year) {
-    cleanTitle = rawTitle.replace(/[._]/g, " ").trim();
-  } else {
-    cleanTitle = "";
-  }
+  if (name) cleanTitle = name;
+  else if (!name && !year) cleanTitle = rawTitle.replace(/[._]/g, " ").trim();
+  else cleanTitle = "";
 
   return { cleanTitle, year };
 }
@@ -968,19 +906,13 @@ function extractEpisodeInfo(rawTitle = "") {
   let t = rawTitle.replace(/\[.*?\]/g, " ");
 
   const fullEp = t.match(/\bS\d{1,2}E\d{1,3}\b/i);
-  if (fullEp) {
-    return fullEp[0].toUpperCase();
-  }
+  if (fullEp) return fullEp[0].toUpperCase();
 
   const saisonWord = t.match(/\bSaison\s+\d{1,2}\b/i);
-  if (saisonWord) {
-    return saisonWord[0].replace(/\s+/g, " ");
-  }
+  if (saisonWord) return saisonWord[0].replace(/\s+/g, " ");
 
   const seasonOnly = t.match(/\bS\d{1,2}\b/i);
-  if (seasonOnly) {
-    return seasonOnly[0].toUpperCase();
-  }
+  if (seasonOnly) return seasonOnly[0].toUpperCase();
 
   return null;
 }
@@ -991,22 +923,14 @@ function extractQuality(rawTitle = "") {
   const upper = rawTitle.toUpperCase();
 
   let resolution = null;
-  if (/\b(2160P|4K)\b/.test(upper)) {
-    resolution = "2160p";
-  } else if (/\b1080P\b/.test(upper)) {
-    resolution = "1080p";
-  } else if (/\b720P\b/.test(upper)) {
-    resolution = "720p";
-  }
+  if (/\b(2160P|4K)\b/.test(upper)) resolution = "2160p";
+  else if (/\b1080P\b/.test(upper)) resolution = "1080p";
+  else if (/\b720P\b/.test(upper)) resolution = "720p";
 
   let codec = null;
-  if (/\b(HEVC|H\.?265|X265)\b/.test(upper)) {
-    codec = "x265 / H.265";
-  } else if (/\b(H\.?264|X264)\b/.test(upper)) {
-    codec = "x264 / H.264";
-  } else if (/\bAV1\b/.test(upper)) {
-    codec = "AV1";
-  }
+  if (/\b(HEVC|H\.?265|X265)\b/.test(upper)) codec = "x265 / H.265";
+  else if (/\b(H\.?264|X264)\b/.test(upper)) codec = "x264 / H.264";
+  else if (/\bAV1\b/.test(upper)) codec = "AV1";
 
   const parts = [];
   if (resolution) parts.push(resolution);
@@ -1046,10 +970,7 @@ function cleanGameTitle(rawTitle = "") {
   t = t.replace(/[:\-–_]+$/g, " ");
   t = t.replace(/\s+/g, " ").trim();
 
-  if (!t) {
-    return rawTitle.replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
-  }
-
+  if (!t) return rawTitle.replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
   return t;
 }
 
@@ -1058,10 +979,7 @@ function cleanGameTitleForIgdb(rawTitle = "") {
   if (!t) return "";
 
   t = t.replace(/\b(Manual|CE)\b.*$/i, " ");
-  t = t.replace(
-    /\b(Relaunched|Deluxe Edition|Ultimate Edition|Royal Edition|Digital Deluxe Edition|Complete Edition|Game of the Year)\b.*$/i,
-    " "
-  );
+  t = t.replace(/\b(Relaunched|Deluxe Edition|Ultimate Edition|Royal Edition|Digital Deluxe Edition|Complete Edition|Game of the Year)\b.*$/i, " ");
 
   t = t.replace(/\+\s*DLCs?\/?Bonuses?.*$/i, " ");
   t = t.replace(/\bUpdate\b.*$/i, " ");
@@ -1080,12 +998,7 @@ function cleanGameTitleForIgdb(rawTitle = "") {
 
 function getItemText(item) {
   return (
-    [
-      item.contentSnippet,
-      item.content,
-      item.summary,
-      item.description,
-    ]
+    [item.contentSnippet, item.content, item.summary, item.description]
       .filter(Boolean)
       .join(" ")
       .replace(/\s+/g, " ")
@@ -1097,51 +1010,30 @@ function parseYggMeta(item) {
   const text = getItemText(item);
 
   let addedAtStr = null;
-  const dateMatch = text.match(
-    /Ajouté le\s*:\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i
-  );
-  if (dateMatch) {
-    addedAtStr = dateMatch[1];
-  }
+  const dateMatch = text.match(/Ajouté le\s*:\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i);
+  if (dateMatch) addedAtStr = dateMatch[1];
 
   let sizeStr = null;
-
-  const sizeMatch1 = text.match(
-    /Taille(?:\s+de l'upload)?\s*:\s*([0-9.,]+\s*[A-Za-z]+)\b/i
-  );
-  if (sizeMatch1) {
-    sizeStr = sizeMatch1[1].replace(/\s+/g, "");
-  } else {
+  const sizeMatch1 = text.match(/Taille(?:\s+de l'upload)?\s*:\s*([0-9.,]+\s*[A-Za-z]+)\b/i);
+  if (sizeMatch1) sizeStr = sizeMatch1[1].replace(/\s+/g, "");
+  else {
     const sizeMatch2 = text.match(/Taille[^0-9]*([0-9.,]+\s*[A-Za-z]+)/i);
-    if (sizeMatch2) {
-      sizeStr = sizeMatch2[1].replace(/\s+/g, "");
-    }
+    if (sizeMatch2) sizeStr = sizeMatch2[1].replace(/\s+/g, "");
   }
 
   let seedersParsed = null;
   const seedMatch = text.match(/(\d+)\s*seeders?/i);
-  if (seedMatch) {
-    seedersParsed = Number(seedMatch[1]);
-  }
+  if (seedMatch) seedersParsed = Number(seedMatch[1]);
 
   return { addedAtStr, sizeStr, seedersParsed };
 }
 
 function timestampFromYggDate(str) {
   if (!str) return 0;
-  const m = str.match(
-    /^([0-9]{2})\/([0-9]{2})\/([0-9]{4})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})$/
-  );
+  const m = str.match(/^([0-9]{2})\/([0-9]{2})\/([0-9]{4})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})$/);
   if (!m) return 0;
   const [, dd, mm, yyyy, hh, ii, ss] = m;
-  const d = new Date(
-    Number(yyyy),
-    Number(mm) - 1,
-    Number(dd),
-    Number(hh),
-    Number(ii),
-    Number(ss)
-  );
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(ii), Number(ss));
   const t = d.getTime();
   return Number.isNaN(t) ? 0 : t;
 }
@@ -1150,13 +1042,35 @@ function timestampFromYggDate(str) {
 // TMDB HELPERS + CACHE
 // ============================================================================
 
+let tmdbCallCountToday = 0;
+let igdbCallCountToday = 0;
+let currentStatsDateKey = getTodayKey();
+
+function resetApiCountersIfNewDay() {
+  const today = getTodayKey();
+  if (today !== currentStatsDateKey) {
+    currentStatsDateKey = today;
+    tmdbCallCountToday = 0;
+    igdbCallCountToday = 0;
+    logInfo("STATS_API", `Changement de jour → remise à zéro des compteurs API`);
+  }
+}
+
+function incTmdbCalls(n = 1) {
+  resetApiCountersIfNewDay();
+  tmdbCallCountToday += n;
+}
+
+function incIgdbCalls(n = 1) {
+  resetApiCountersIfNewDay();
+  igdbCallCountToday += n;
+}
+
 async function tmdbSearch(pathUrl, params) {
   incTmdbCalls();
   const url = new URL(`${TMDB_BASE_URL}${pathUrl}`);
   Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== "") {
-      url.searchParams.set(k, v);
-    }
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
   });
 
   logInfo("TMDB_CALL", `Search ${pathUrl} → ${url.toString()}`);
@@ -1185,12 +1099,9 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
   if (!TMDB_API_KEY || !rawTitle) return null;
 
   const cacheKey = `${categoryRaw || "any"}::${rawTitle.toLowerCase()}`;
-  if (posterCache.has(cacheKey)) {
-    return posterCache.get(cacheKey);
-  }
+  if (posterCache.has(cacheKey)) return posterCache.get(cacheKey);
 
   const catKey = normalizeCategoryKey(categoryRaw);
-
   if (catKey === "games") {
     posterCache.set(cacheKey, null);
     return null;
@@ -1199,10 +1110,7 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
   const kind = catKey === "series" || catKey === "emissions" ? "series" : "film";
 
   const { cleanTitle, year } = guessTitleAndYear(rawTitle, kind);
-  const queryBase =
-    cleanTitle && cleanTitle.length > 0
-      ? cleanTitle
-      : rawTitle.replace(/[._]/g, " ").trim();
+  const queryBase = cleanTitle && cleanTitle.length > 0 ? cleanTitle : rawTitle.replace(/[._]/g, " ").trim();
 
   if (!queryBase) {
     posterCache.set(cacheKey, null);
@@ -1283,8 +1191,7 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
   if (poster) {
     try {
       const mediaType = kind === "series" ? "series" : "film";
-      const externalId =
-        extractImageKeyFromUrl(poster) || `${mediaType}_${cacheKey}`;
+      const externalId = extractImageKeyFromUrl(poster) || `${mediaType}_${cacheKey}`;
 
       const localUrl = await ensureLocalPoster({
         provider: "tmdb",
@@ -1293,28 +1200,19 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
         remoteUrl: poster,
       });
 
-      if (localUrl) {
-        finalPoster = localUrl;
-      }
+      if (localUrl) finalPoster = localUrl;
     } catch (e) {
-      logError(
-        "TMDB_POSTER",
-        `Erreur cache local poster pour "${rawTitle}" (${kind}): ${e.message}`
-      );
+      logError("TMDB_POSTER", `Erreur cache local poster pour "${rawTitle}" (${kind}): ${e.message}`);
     }
   }
 
   if (!finalPoster) {
-    logWarn(
-      "TMDB_NO_POSTER",
-      `AUCUN POSTER | rawTitle="${rawTitle}" | query="${queryBase}" | year=${year != null ? year : "?"} | kind=${kind}`
-    );
+    logWarn("TMDB_NO_POSTER", `AUCUN POSTER | rawTitle="${rawTitle}" | query="${queryBase}" | year=${year != null ? year : "?"} | kind=${kind}`);
   }
 
   posterCache.set(cacheKey, finalPoster || null);
   return finalPoster || null;
 }
-
 
 // ============================================================================
 // IGDB HELPERS + CACHE (JEUX)
@@ -1330,9 +1228,7 @@ async function getIgdbToken() {
   }
 
   const now = Date.now();
-  if (igdbToken && now < igdbTokenExpiry - 60 * 1000) {
-    return igdbToken;
-  }
+  if (igdbToken && now < igdbTokenExpiry - 60 * 1000) return igdbToken;
 
   try {
     const params = new URLSearchParams({
@@ -1398,20 +1294,15 @@ async function igdbSearchGame(title) {
     }
 
     const games = await resp.json();
-    if (!Array.isArray(games) || games.length === 0) {
-      return null;
-    }
+    if (!Array.isArray(games) || games.length === 0) return null;
 
     const withCover = games.filter((g) => g.cover && g.cover.image_id);
     const chosen = withCover[0] || games[0];
 
-    if (!chosen.cover || !chosen.cover.image_id) {
-      return null;
-    }
+    if (!chosen.cover || !chosen.cover.image_id) return null;
 
     const imageId = chosen.cover.image_id;
-    const url = `https://images.igdb.com/igdb/image/upload/t_cover_big/${imageId}.jpg`;
-    return url;
+    return `https://images.igdb.com/igdb/image/upload/t_cover_big/${imageId}.jpg`;
   } catch (err) {
     logError("IGDB", `Erreur recherche IGDB pour "${title}": ${err.message}`);
     return null;
@@ -1422,9 +1313,7 @@ async function fetchIgdbCoverForTitle(rawTitle = "") {
   if (!rawTitle) return null;
 
   const cacheKey = `games::${rawTitle.toLowerCase()}`;
-  if (posterCache.has(cacheKey)) {
-    return posterCache.get(cacheKey);
-  }
+  if (posterCache.has(cacheKey)) return posterCache.get(cacheKey);
 
   const mainTitle = cleanGameTitleForIgdb(rawTitle);
   if (!mainTitle) {
@@ -1435,15 +1324,9 @@ async function fetchIgdbCoverForTitle(rawTitle = "") {
   const queries = new Set();
   queries.add(mainTitle);
 
-  if (mainTitle.includes(":")) {
-    queries.add(mainTitle.split(":")[0].trim());
-  }
-  if (mainTitle.includes(" - ")) {
-    queries.add(mainTitle.split(" - ")[0].trim());
-  }
-  if (mainTitle.includes(" – ")) {
-    queries.add(mainTitle.split(" – ")[0].trim());
-  }
+  if (mainTitle.includes(":")) queries.add(mainTitle.split(":")[0].trim());
+  if (mainTitle.includes(" - ")) queries.add(mainTitle.split(" - ")[0].trim());
+  if (mainTitle.includes(" – ")) queries.add(mainTitle.split(" – ")[0].trim());
 
   let coverUrl = null;
   let usedQuery = mainTitle;
@@ -1458,10 +1341,7 @@ async function fetchIgdbCoverForTitle(rawTitle = "") {
   }
 
   if (!coverUrl) {
-    logWarn(
-      "IGDB_NO_COVER",
-      `Aucune cover IGDB | rawTitle="${rawTitle}" | query="${Array.from(queries).join(" || ")}"`
-    );
+    logWarn("IGDB_NO_COVER", `Aucune cover IGDB | rawTitle="${rawTitle}" | query="${Array.from(queries).join(" || ")}"`);
   } else {
     logInfo("IGDB_MATCH", `Match cover IGDB | rawTitle="${rawTitle}" | query="${usedQuery}"`);
   }
@@ -1479,10 +1359,11 @@ const insertItemStmt = db.prepare(`
     guid, category, raw_title, title, year, episode,
     size, seeders, quality,
     added_at, added_at_ts,
-    poster, page_link, download_link,
+    poster, poster_ref,
+    page_link, download_link,
     created_at, updated_at
   )
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `);
 
 const updateItemStmt = db.prepare(`
@@ -1523,17 +1404,14 @@ async function syncCategory(catKey) {
   for (const item of items) {
     try {
       const rawTitle = item.title || "";
-      const kind =
-        normCat === "series" || normCat === "emissions" ? "series" : "film";
+      const kind = normCat === "series" || normCat === "emissions" ? "series" : "film";
 
       const { cleanTitle, year } = guessTitleAndYear(rawTitle, kind);
       const quality = extractQuality(rawTitle);
       const episode = kind === "series" ? extractEpisodeInfo(rawTitle) : null;
 
       let displayTitle = cleanTitle || rawTitle;
-      if (normCat === "games") {
-        displayTitle = cleanGameTitle(rawTitle);
-      }
+      if (normCat === "games") displayTitle = cleanGameTitle(rawTitle);
 
       const { addedAtStr, sizeStr, seedersParsed } = parseYggMeta(item);
 
@@ -1542,17 +1420,14 @@ async function syncCategory(catKey) {
         item.link ||
         (item.guid && item.guid.includes("http") ? item.guid : null) ||
         null;
-      const downloadLink =
-        (item.enclosure && item.enclosure.url) || pageLink || null;
+      const downloadLink = (item.enclosure && item.enclosure.url) || pageLink || null;
 
       const addedAt = addedAtStr || null;
       const addedAtTs =
         addedAtStr != null
           ? timestampFromYggDate(addedAtStr)
           : (() => {
-              const d = new Date(
-                item.uploaded_at || item.pubDate || item.isoDate || ""
-              );
+              const d = new Date(item.uploaded_at || item.pubDate || item.isoDate || "");
               const t = d.getTime();
               return Number.isNaN(t) ? 0 : t;
             })();
@@ -1570,6 +1445,7 @@ async function syncCategory(catKey) {
 
       if (!existing) {
         let poster = null;
+        let posterRef = null;
 
         try {
           let remotePoster = null;
@@ -1587,6 +1463,8 @@ async function syncCategory(catKey) {
             });
 
             if (cacheParams) {
+              posterRef = makePosterRef(cacheParams.provider, cacheParams.mediaType, cacheParams.externalId);
+
               const localUrl = await ensureLocalPoster(cacheParams);
               poster = localUrl || remotePoster;
             } else {
@@ -1595,10 +1473,7 @@ async function syncCategory(catKey) {
           }
         } catch (e) {
           const src = normCat === "games" ? "IGDB" : "TMDB";
-          logError(
-            src,
-            `Poster error pour "${rawTitle}" (${normCat}): ${e.message}`
-          );
+          logError(src, `Poster error pour "${rawTitle}" (${normCat}): ${e.message}`);
         }
 
         insertItemStmt.run(
@@ -1614,6 +1489,7 @@ async function syncCategory(catKey) {
           addedAt,
           addedAtTs,
           poster,
+          posterRef,
           pageLink,
           downloadLink,
           now,
@@ -1656,15 +1532,18 @@ function extractImageKeyFromUrl(url) {
   }
 }
 
+function makePosterRef(provider, mediaType, externalId) {
+  if (!provider || !mediaType || externalId == null) return null;
+  return `${String(provider).toLowerCase()}|${String(mediaType).toLowerCase()}|${String(externalId)}`;
+}
+
 function buildPosterCacheParamsFromItem(item) {
   if (!item || !item.poster) return null;
 
   const remoteUrl = item.poster;
   if (typeof remoteUrl !== "string" || !remoteUrl.trim()) return null;
 
-  if (/^\/posters\//.test(remoteUrl)) {
-    return null;
-  }
+  if (/^\/posters\//.test(remoteUrl)) return null;
 
   const category = item.category || "film";
   const normCat = normalizeCategoryKey(category);
@@ -1675,37 +1554,21 @@ function buildPosterCacheParamsFromItem(item) {
   const externalId = extractImageKeyFromUrl(remoteUrl);
   if (!externalId) return null;
 
-  return {
-    provider,
-    mediaType,
-    externalId,
-    remoteUrl,
-  };
+  return { provider, mediaType, externalId, remoteUrl };
 }
 
 async function enrichItemsWithLocalPosters(items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return items || [];
-  }
+  if (!Array.isArray(items) || items.length === 0) return items || [];
 
   const tasks = items.map(async (item) => {
     try {
       const params = buildPosterCacheParamsFromItem(item);
-      if (!params) {
-        return item;
-      }
+      if (!params) return item;
 
       const localUrl = await ensureLocalPoster(params);
-      if (localUrl) {
-        item.posterUrl = localUrl;
-      } else {
-        item.posterUrl = item.poster || null;
-      }
+      item.posterUrl = localUrl || item.poster || null;
     } catch (err) {
-      logError(
-        "POSTERS",
-        `Erreur enrichItemsWithLocalPosters pour guid=${item.guid || "?"}: ${err.message}`
-      );
+      logError("POSTERS", `Erreur enrichItemsWithLocalPosters pour guid=${item.guid || "?"}: ${err.message}`);
       item.posterUrl = item.poster || null;
     }
     return item;
@@ -1726,9 +1589,7 @@ function purgeOldItems(maxAgeDays) {
       ? maxAgeDays
       : base;
 
-  const days =
-    Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DEFAULT_RETENTION_DAYS;
-
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DEFAULT_RETENTION_DAYS;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   const selectToDeleteStmt = db.prepare(`
@@ -1751,22 +1612,12 @@ function purgeOldItems(maxAgeDays) {
   const info = deleteStmt.run(cutoff);
   const deleted = info.changes || 0;
 
-  logInfo(
-    "PURGE",
-    `${deleted} anciens items supprimés (avant ${new Date(
-      cutoff
-    ).toLocaleString("fr-FR")} | rétention = ${days} jours)`
-  );
+  logInfo("PURGE", `${deleted} anciens items supprimés (avant ${new Date(cutoff).toLocaleString("fr-FR")} | rétention = ${days} jours)`);
 
   try {
-    if (itemsToDelete.length > 0) {
-      cleanupPostersAfterItemsPurge(itemsToDelete);
-    }
+    if (itemsToDelete.length > 0) cleanupPostersAfterItemsPurge(itemsToDelete);
   } catch (err) {
-    logError(
-      "POSTERS_PURGE",
-      `Erreur pendant cleanupPostersAfterItemsPurge: ${err.message}`
-    );
+    logError("POSTERS_PURGE", `Erreur pendant cleanupPostersAfterItemsPurge: ${err.message}`);
   }
 
   return deleted;
@@ -1792,15 +1643,15 @@ async function syncAllCategories() {
 
   purgedCount = purgeOldItems();
 
-  const parts = Object.entries(summary).map(
-    ([key, count]) => `${key}=${count != null ? count : "?"}`
-  );
+  const parts = Object.entries(summary).map(([key, count]) => `${key}=${count != null ? count : "?"}`);
   parts.push(`purged=${purgedCount}`);
 
   logInfo("SYNC", `Résumé: ${parts.join(", ")}`);
   logInfo("SYNC", "Synchronisation globale terminée.");
 
+  // ✅ NOUVEAU : lastSyncAt persistant
   lastSyncAt = new Date().toISOString();
+  saveLastSyncAtToDb(lastSyncAt);
 
   try {
     await recordDailyStats();
@@ -1808,10 +1659,7 @@ async function syncAllCategories() {
     logError("STATS_DAILY", `Erreur lors de recordDailyStats: ${err.message}`);
   }
 
-  return {
-    summary,
-    purged: purgedCount,
-  };
+  return { summary, purged: purgedCount };
 }
 
 // ============================================================================
@@ -1867,38 +1715,22 @@ app.get("/api/config/sync-interval", (req, res) => {
 });
 
 app.post("/api/config/sync-interval", (req, res) => {
-  const raw =
-    (req.body && (req.body.minutes ?? req.body.value)) ??
-    req.query.minutes;
+  const raw = (req.body && (req.body.minutes ?? req.body.value)) ?? req.query.minutes;
 
   let minutes;
-
-  if (typeof raw === "string" && raw.toLowerCase() === "manual") {
-    minutes = 0;
-  } else {
-    minutes = Number(raw);
-  }
+  if (typeof raw === "string" && raw.toLowerCase() === "manual") minutes = 0;
+  else minutes = Number(raw);
 
   if (!Number.isFinite(minutes)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Valeur minutes invalide",
-    });
+    return res.status(400).json({ ok: false, error: "Valeur minutes invalide" });
   }
 
   saveSyncIntervalToDb(minutes);
   schedulePeriodicSync(minutes);
 
-  logInfo(
-    "SYNC_CFG",
-    `Intervalle de synchronisation mis à jour: ${minutes} minutes`
-  );
+  logInfo("SYNC_CFG", `Intervalle de synchronisation mis à jour: ${minutes} minutes`);
 
-  return res.json({
-    ok: true,
-    minutes,
-    isManual: minutes <= 0,
-  });
+  return res.json({ ok: true, minutes, isManual: minutes <= 0 });
 });
 
 // ============================================================================
@@ -1914,17 +1746,11 @@ app.get("/api/retention", (req, res) => {
 });
 
 app.post("/api/retention", (req, res) => {
-  const raw =
-    (req.body && (req.body.days ?? req.body.value)) ??
-    req.query.days;
-
+  const raw = (req.body && (req.body.days ?? req.body.value)) ?? req.query.days;
   const newDays = Number(raw);
 
   if (!Number.isFinite(newDays) || newDays <= 0) {
-    return res.status(400).json({
-      ok: false,
-      error: "Durée de rétention invalide",
-    });
+    return res.status(400).json({ ok: false, error: "Durée de rétention invalide" });
   }
 
   const oldDays = retentionDays;
@@ -1932,10 +1758,7 @@ app.post("/api/retention", (req, res) => {
 
   saveRetentionDaysToDb(newDays);
 
-  logInfo(
-    "PURGE_CFG",
-    `Durée de rétention mise à jour: ${oldDays} jours → ${newDays} jours`
-  );
+  logInfo("PURGE_CFG", `Durée de rétention mise à jour: ${oldDays} jours → ${newDays} jours`);
 
   let purged = 0;
   try {
@@ -1944,20 +1767,12 @@ app.post("/api/retention", (req, res) => {
     logError("PURGE_CFG", `Erreur purge après changement rétention: ${e.message}`);
   }
 
-  return res.json({
-    ok: true,
-    previousDays: oldDays,
-    days: retentionDays,
-    purged,
-  });
+  return res.json({ ok: true, previousDays: oldDays, days: retentionDays, purged });
 });
-
 
 // ============================================================================
 // SYNC API : empêcher plusieurs synchros en parallèle
 // ============================================================================
-
-let isSyncRunning = false;
 
 async function runGlobalSyncOnce() {
   if (isSyncRunning) {
@@ -1992,11 +1807,8 @@ async function runGlobalSyncOnce() {
 
 function selectItemsFromDb(category, sort, limitParam) {
   let orderBy = "added_at_ts DESC";
-  if (sort === "seeders") {
-    orderBy = "seeders DESC";
-  } else if (sort === "name") {
-    orderBy = "title COLLATE NOCASE ASC";
-  }
+  if (sort === "seeders") orderBy = "seeders DESC";
+  else if (sort === "name") orderBy = "title COLLATE NOCASE ASC";
 
   let limitClause = "";
   const params = [category];
@@ -2031,17 +1843,13 @@ function selectItemsFromDb(category, sort, limitParam) {
     ${limitClause};
   `;
 
-  const stmt = db.prepare(sql);
-  return stmt.all(...params);
+  return db.prepare(sql).all(...params);
 }
 
 function selectFavoritesFromDb(sort, limitParam) {
   let orderBy = "i.added_at_ts DESC";
-  if (sort === "seeders") {
-    orderBy = "i.seeders DESC";
-  } else if (sort === "name") {
-    orderBy = "i.title COLLATE NOCASE ASC";
-  }
+  if (sort === "seeders") orderBy = "i.seeders DESC";
+  else if (sort === "name") orderBy = "i.title COLLATE NOCASE ASC";
 
   const params = [];
   let limitClause = "";
@@ -2075,9 +1883,12 @@ function selectFavoritesFromDb(sort, limitParam) {
     ${limitClause};
   `;
 
-  const stmt = db.prepare(sql);
-  return stmt.all(...params);
+  return db.prepare(sql).all(...params);
 }
+
+// ============================================================================
+// STATS DAILY - prepared statements + helpers
+// ============================================================================
 
 const countItemsByCategoryStmt = db.prepare(`
   SELECT category, COUNT(*) AS cnt
@@ -2116,30 +1927,6 @@ const upsertStatsDailyStmt = db.prepare(`
     created_at      = excluded.created_at
 `);
 
-let tmdbCallCountToday = 0;
-let igdbCallCountToday = 0;
-let currentStatsDateKey = getTodayKey();
-
-function resetApiCountersIfNewDay() {
-  const today = getTodayKey();
-  if (today !== currentStatsDateKey) {
-    currentStatsDateKey = today;
-    tmdbCallCountToday = 0;
-    igdbCallCountToday = 0;
-    logInfo("STATS_API", `Changement de jour → remise à zéro des compteurs API`);
-  }
-}
-
-function incTmdbCalls(n = 1) {
-  resetApiCountersIfNewDay();
-  tmdbCallCountToday += n;
-}
-
-function incIgdbCalls(n = 1) {
-  resetApiCountersIfNewDay();
-  igdbCallCountToday += n;
-}
-
 // ============================================================================
 // API LOGS (popup "Logs")
 // ============================================================================
@@ -2149,9 +1936,7 @@ app.get("/api/logs", (req, res) => {
 
   fs.readFile(LOG_FILE, "utf8", (err, data) => {
     if (err) {
-      if (err.code === "ENOENT") {
-        return res.json({ lines: [] });
-      }
+      if (err.code === "ENOENT") return res.json({ lines: [] });
       console.error("[LOGS] Erreur lecture fichier:", err.message);
       return res.status(500).json({ error: "Erreur lecture logs" });
     }
@@ -2172,10 +1957,7 @@ app.post("/api/sync", async (req, res) => {
     const info = await runGlobalSyncOnce();
 
     if (info.alreadyRunning) {
-      return res.status(409).json({
-        ok: false,
-        error: "Sync déjà en cours",
-      });
+      return res.status(409).json({ ok: false, error: "Sync déjà en cours" });
     }
 
     return res.json({
@@ -2187,10 +1969,7 @@ app.post("/api/sync", async (req, res) => {
     });
   } catch (err) {
     logError("API_SYNC", `Erreur /api/sync: ${err.message}`);
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur pendant la synchronisation",
-    });
+    return res.status(500).json({ ok: false, error: "Erreur pendant la synchronisation" });
   }
 });
 
@@ -2226,11 +2005,7 @@ app.get("/api/feed", async (req, res) => {
       const groupsPromises = CATEGORY_CONFIGS.map(async (cfg) => {
         let items = selectItemsFromDb(cfg.key, sort, limitParam);
         items = await enrichItemsWithLocalPosters(items);
-        return {
-          key: cfg.key,
-          label: cfg.label,
-          items,
-        };
+        return { key: cfg.key, label: cfg.label, items };
       });
 
       const groups = await Promise.all(groupsPromises);
@@ -2255,18 +2030,9 @@ app.post("/api/items/:guid/edit", (req, res) => {
   const guid = req.params.guid;
   const { title } = req.body || {};
 
-  if (!guid) {
-    return res.status(400).json({
-      ok: false,
-      error: "GUID manquant",
-    });
-  }
-
+  if (!guid) return res.status(400).json({ ok: false, error: "GUID manquant" });
   if (!title || typeof title !== "string" || !title.trim()) {
-    return res.status(400).json({
-      ok: false,
-      error: "Titre invalide",
-    });
+    return res.status(400).json({ ok: false, error: "Titre invalide" });
   }
 
   try {
@@ -2274,27 +2040,14 @@ app.post("/api/items/:guid/edit", (req, res) => {
     const info = updateItemTitleStmt.run(title.trim(), now, guid);
 
     if (info.changes === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "Élément introuvable",
-      });
+      return res.status(404).json({ ok: false, error: "Élément introuvable" });
     }
 
-    logInfo(
-      "ITEM_EDIT",
-      `Titre mis à jour pour guid=${guid} → "${title.trim()}"`
-    );
-
+    logInfo("ITEM_EDIT", `Titre mis à jour pour guid=${guid} → "${title.trim()}"`);
     return res.json({ ok: true });
   } catch (err) {
-    logError(
-      "ITEM_EDIT",
-      `Erreur MAJ titre guid=${guid}: ${err.message}`
-    );
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur serveur lors de la mise à jour du titre",
-    });
+    logError("ITEM_EDIT", `Erreur MAJ titre guid=${guid}: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur lors de la mise à jour du titre" });
   }
 });
 
@@ -2309,14 +2062,10 @@ app.get("/api/details", async (req, res) => {
     const category = (req.query.category || "film").toString();
     const yearHint = req.query.year ? parseInt(req.query.year, 10) : undefined;
 
-    if (!rawTitle) {
-      return res.status(400).json({ error: "Missing title" });
-    }
+    if (!rawTitle) return res.status(400).json({ error: "Missing title" });
     if (!TMDB_API_KEY) {
       logWarn("TMDB_DETAILS", "TMDB_API_KEY non configuré");
-      return res
-        .status(500)
-        .json({ error: "TMDB_API_KEY non configuré côté serveur." });
+      return res.status(500).json({ error: "TMDB_API_KEY non configuré côté serveur." });
     }
 
     const catKey = normalizeCategoryKey(category);
@@ -2324,14 +2073,9 @@ app.get("/api/details", async (req, res) => {
     const guessKind = catKey === "series" ? "series" : "film";
 
     const { cleanTitle, year } = guessTitleAndYear(rawTitle, guessKind);
-    const baseTitle =
-      cleanTitle && cleanTitle.length
-        ? cleanTitle
-        : rawTitle.replace(/[._]/g, " ").trim();
+    const baseTitle = cleanTitle && cleanTitle.length ? cleanTitle : rawTitle.replace(/[._]/g, " ").trim();
 
-    if (!baseTitle) {
-      return res.status(400).json({ error: "Titre non exploitable" });
-    }
+    if (!baseTitle) return res.status(400).json({ error: "Titre non exploitable" });
 
     const searchUrl = new URL(`${TMDB_BASE_URL}/search/${tmdbType}`);
     searchUrl.searchParams.set("api_key", TMDB_API_KEY);
@@ -2341,31 +2085,20 @@ app.get("/api/details", async (req, res) => {
 
     const y = yearHint || year;
     if (y && !Number.isNaN(y)) {
-      if (tmdbType === "movie") {
-        searchUrl.searchParams.set("year", String(y));
-      } else {
-        searchUrl.searchParams.set("first_air_date_year", String(y));
-      }
+      if (tmdbType === "movie") searchUrl.searchParams.set("year", String(y));
+      else searchUrl.searchParams.set("first_air_date_year", String(y));
     }
 
-    logInfo(
-      "TMDB_DETAILS",
-      `Search "${baseTitle}" (type=${tmdbType}, year=${y || "?"})`
-    );
+    logInfo("TMDB_DETAILS", `Search "${baseTitle}" (type=${tmdbType}, year=${y || "?"})`);
 
     const searchResp = await fetch(searchUrl.toString());
     if (!searchResp.ok) {
-      logWarn(
-        "TMDB_DETAILS_HTTP",
-        `HTTP ${searchResp.status} pour ${searchUrl.toString()}`
-      );
+      logWarn("TMDB_DETAILS_HTTP", `HTTP ${searchResp.status} pour ${searchUrl.toString()}`);
       return res.status(502).json({ error: "Erreur HTTP TMDB (search)" });
     }
 
     const searchData = await searchResp.json();
-    const results = Array.isArray(searchData.results)
-      ? searchData.results
-      : [];
+    const results = Array.isArray(searchData.results) ? searchData.results : [];
 
     if (!results.length) {
       logWarn("TMDB_DETAILS_NO_RESULT", `Aucun résultat pour "${baseTitle}"`);
@@ -2382,10 +2115,7 @@ app.get("/api/details", async (req, res) => {
 
     const detailsResp = await fetch(detailsUrl.toString());
     if (!detailsResp.ok) {
-      logWarn(
-        "TMDB_DETAILS_HTTP",
-        `HTTP ${detailsResp.status} pour ${detailsUrl.toString()}`
-      );
+      logWarn("TMDB_DETAILS_HTTP", `HTTP ${detailsResp.status} pour ${detailsUrl.toString()}`);
       return res.status(502).json({ error: "Erreur HTTP TMDB (details)" });
     }
 
@@ -2398,27 +2128,17 @@ app.get("/api/details", async (req, res) => {
       "";
 
     let runtime = null;
-    if (typeof d.runtime === "number" && d.runtime > 0) {
-      runtime = `${d.runtime} min`;
-    } else if (
-      Array.isArray(d.episode_run_time) &&
-      d.episode_run_time.length &&
-      d.episode_run_time[0] > 0
-    ) {
+    if (typeof d.runtime === "number" && d.runtime > 0) runtime = `${d.runtime} min`;
+    else if (Array.isArray(d.episode_run_time) && d.episode_run_time.length && d.episode_run_time[0] > 0) {
       runtime = `${d.episode_run_time[0]} min / épisode`;
     }
 
-    const genre =
-      Array.isArray(d.genres) && d.genres.length
-        ? d.genres.map((g) => g.name).join(", ")
-        : null;
+    const genre = Array.isArray(d.genres) && d.genres.length ? d.genres.map((g) => g.name).join(", ") : null;
 
     let director = null;
     if (d.credits && Array.isArray(d.credits.crew)) {
       const directors = d.credits.crew.filter((p) => p.job === "Director");
-      if (directors.length) {
-        director = directors.map((p) => p.name).join(", ");
-      }
+      if (directors.length) director = directors.map((p) => p.name).join(", ");
     }
     if (!director && Array.isArray(d.created_by) && d.created_by.length) {
       director = d.created_by.map((p) => p.name).join(", ");
@@ -2426,39 +2146,24 @@ app.get("/api/details", async (req, res) => {
 
     let actors = null;
     if (d.credits && Array.isArray(d.credits.cast) && d.credits.cast.length) {
-      actors = d.credits.cast
-        .slice(0, 5)
-        .map((p) => p.name)
-        .join(", ");
+      actors = d.credits.cast.slice(0, 5).map((p) => p.name).join(", ");
     }
 
-    const language =
-      Array.isArray(d.spoken_languages) && d.spoken_languages.length
-        ? d.spoken_languages.map((l) => l.name || l.english_name).join(", ")
-        : null;
+    const language = Array.isArray(d.spoken_languages) && d.spoken_languages.length
+      ? d.spoken_languages.map((l) => l.name || l.english_name).join(", ")
+      : null;
 
-    const country =
-      Array.isArray(d.production_countries) && d.production_countries.length
-        ? d.production_countries.map((c) => c.name).join(", ")
-        : null;
+    const country = Array.isArray(d.production_countries) && d.production_countries.length
+      ? d.production_countries.map((c) => c.name).join(", ")
+      : null;
 
     const awards = d.tagline || null;
-
     const poster = d.poster_path ? `${TMDB_IMG_BASE}${d.poster_path}` : null;
 
-    const imdbRating =
-      typeof d.vote_average === "number" && d.vote_average > 0
-        ? d.vote_average.toFixed(1)
-        : null;
-    const imdbVotes =
-      typeof d.vote_count === "number" && d.vote_count > 0
-        ? d.vote_count.toLocaleString("fr-FR")
-        : null;
+    const imdbRating = typeof d.vote_average === "number" && d.vote_average > 0 ? d.vote_average.toFixed(1) : null;
+    const imdbVotes = typeof d.vote_count === "number" && d.vote_count > 0 ? d.vote_count.toLocaleString("fr-FR") : null;
 
-    const imdbID =
-      d.external_ids && d.external_ids.imdb_id
-        ? d.external_ids.imdb_id
-        : null;
+    const imdbID = d.external_ids && d.external_ids.imdb_id ? d.external_ids.imdb_id : null;
 
     const payload = {
       title,
@@ -2495,16 +2200,10 @@ app.get("/api/details", async (req, res) => {
 app.post("/api/admin/posters/cleanup-orphans", (req, res) => {
   try {
     const result = cleanupPosterOrphans();
-    return res.json({
-      ok: true,
-      ...result,
-    });
+    return res.json({ ok: true, ...result });
   } catch (err) {
     logError("POSTERS_CLEANUP", `Erreur API cleanup-orphans: ${err.message}`);
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur pendant le nettoyage des affiches orphelines",
-    });
+    return res.status(500).json({ ok: false, error: "Erreur pendant le nettoyage des affiches orphelines" });
   }
 });
 
@@ -2522,41 +2221,25 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
     return res.status(400).json({ ok: false, error: "GUID invalide" });
   }
 
-  if (!guid) {
-    return res.status(400).json({ ok: false, error: "GUID manquant" });
-  }
+  if (!guid) return res.status(400).json({ ok: false, error: "GUID manquant" });
 
   try {
-    const item = db
-      .prepare(
-        `
+    const item = db.prepare(`
         SELECT guid, category, raw_title, title, poster
         FROM items
         WHERE guid = ?
-      `
-      )
-      .get(guid);
+      `).get(guid);
 
     if (!item) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Item introuvable pour ce GUID" });
+      return res.status(404).json({ ok: false, error: "Item introuvable pour ce GUID" });
     }
 
     const normCat = normalizeCategoryKey(item.category || "film");
     const isGame = normCat === "games";
 
-    const searchTitle =
-      item.title ||
-      item.raw_title ||
-      item.rawTitle ||
-      "";
-
+    const searchTitle = (item.title || item.raw_title || "").toString().trim();
     if (!searchTitle) {
-      return res.status(400).json({
-        ok: false,
-        error: "Titre introuvable pour cet item",
-      });
+      return res.status(400).json({ ok: false, error: "Titre introuvable pour cet item" });
     }
 
     let newPoster = null;
@@ -2565,59 +2248,47 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
       if (isGame) {
         const cacheKey = `games::${searchTitle.toLowerCase()}`;
         posterCache.delete(cacheKey);
-
         const remoteCover = await fetchIgdbCoverForTitle(searchTitle);
-        if (remoteCover) {
-          newPoster = remoteCover;
-        }
+        if (remoteCover) newPoster = remoteCover;
       } else if (TMDB_API_KEY) {
         const cacheKey = `${normCat || "any"}::${searchTitle.toLowerCase()}`;
         posterCache.delete(cacheKey);
-
         newPoster = await fetchPosterForTitle(searchTitle, normCat);
       }
     } catch (e) {
       const src = isGame ? "IGDB" : "TMDB";
-      logError(
-        "POSTERS_REFRESH",
-        `Erreur lors de la récupération de la pochette (${src}) pour "${searchTitle}": ${e.message}`
-      );
+      logError("POSTERS_REFRESH", `Erreur lors de la récupération de la pochette (${src}) pour "${searchTitle}": ${e.message}`);
     }
 
     if (!newPoster) {
-      return res.status(404).json({
-        ok: false,
-        error: "Aucune nouvelle pochette trouvée pour ce titre",
-      });
+      return res.status(404).json({ ok: false, error: "Aucune nouvelle pochette trouvée pour ce titre" });
+    }
+
+    let finalPoster = newPoster;
+
+    try {
+      const params = buildPosterCacheParamsFromItem({ category: normCat, poster: newPoster });
+      if (params) {
+        const localUrl = await ensureLocalPoster(params);
+        if (localUrl) finalPoster = localUrl;
+      }
+    } catch (e) {
+      logWarn("POSTERS_REFRESH", `Cache local impossible: ${e.message}`);
     }
 
     const now = Date.now();
-    db.prepare(
-      `
+    db.prepare(`
       UPDATE items
       SET poster = ?, updated_at = ?
       WHERE guid = ?
-    `
-    ).run(newPoster, now, guid);
+    `).run(finalPoster, now, guid);
 
-    logInfo(
-      "POSTERS_REFRESH",
-      `Pochette mise à jour pour guid=${guid}, cat=${normCat}, titre="${searchTitle}"`
-    );
+    logInfo("POSTERS_REFRESH", `Pochette mise à jour (final) pour guid=${guid}, cat=${normCat}, titre="${searchTitle}" → ${finalPoster}`);
 
-    return res.json({
-      ok: true,
-      poster: newPoster,
-    });
+    return res.json({ ok: true, poster: finalPoster });
   } catch (err) {
-    logError(
-      "POSTERS_REFRESH",
-      `Erreur rafraîchissement pochette (guid=${rawGuid}): ${err.message}`
-    );
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur serveur pendant le rafraîchissement de la pochette",
-    });
+    logError("POSTERS_REFRESH", `Erreur rafraîchissement pochette (guid=${rawGuid}): ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur pendant le rafraîchissement de la pochette" });
   }
 });
 
@@ -2627,14 +2298,7 @@ function getTodayKey() {
 
 function getItemsCountsByCategory() {
   const rows = countItemsByCategoryStmt.all();
-  const map = {
-    film: 0,
-    series: 0,
-    emissions: 0,
-    spectacle: 0,
-    animation: 0,
-    games: 0,
-  };
+  const map = { film: 0, series: 0, emissions: 0, spectacle: 0, animation: 0, games: 0 };
 
   let total = 0;
 
@@ -2642,10 +2306,7 @@ function getItemsCountsByCategory() {
     const key = normalizeCategoryKey(row.category || "");
     const cnt = Number(row.cnt) || 0;
     total += cnt;
-
-    if (key in map) {
-      map[key] += cnt;
-    }
+    if (key in map) map[key] += cnt;
   }
 
   return { total, ...map };
@@ -2664,7 +2325,6 @@ async function recordDailyStats() {
   }
 
   const postersCount = await countPosterFiles();
-
   const counts = getItemsCountsByCategory();
 
   try {
@@ -2684,10 +2344,7 @@ async function recordDailyStats() {
       nowTs
     );
 
-    logInfo(
-      "STATS_DAILY",
-      `Stats enregistrées pour ${dateKey} | DB=${dbSizeBytes} bytes, posters=${postersCount}, items=${counts.total}, TMDB=${tmdbCallCountToday}, IGDB=${igdbCallCountToday}`
-    );
+    logInfo("STATS_DAILY", `Stats enregistrées pour ${dateKey} | DB=${dbSizeBytes} bytes, posters=${postersCount}, items=${counts.total}, TMDB=${tmdbCallCountToday}, IGDB=${igdbCallCountToday}`);
   } catch (err) {
     logError("STATS_DAILY", `Erreur upsert stats_daily: ${err.message}`);
   }
@@ -2700,17 +2357,10 @@ async function recordDailyStats() {
 app.get("/api/posters/stats", async (req, res) => {
   try {
     const total = await countPosterFiles();
-
-    return res.json({
-      ok: true,
-      total,
-    });
+    return res.json({ ok: true, total });
   } catch (err) {
     logError("POSTERS_STATS", `Erreur API /api/posters/stats: ${err.message}`);
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur pendant le comptage des affiches",
-    });
+    return res.status(500).json({ ok: false, error: "Erreur pendant le comptage des affiches" });
   }
 });
 
@@ -2728,26 +2378,13 @@ app.get("/api/stats", async (req, res) => {
     const categoryCounts = getCategoryCounts();
 
     return res.json({
-      dbSizeHistory: [
-        {
-          date: dateLabel,
-          sizeMb: dbSizeMb,
-        },
-      ],
-      postersHistory: [
-        {
-          date: dateLabel,
-          count: postersCount,
-        },
-      ],
+      dbSizeHistory: [{ date: dateLabel, sizeMb: dbSizeMb }],
+      postersHistory: [{ date: dateLabel, count: postersCount }],
       categoryCounts,
     });
   } catch (err) {
     logError("STATS_API", `Erreur /api/stats: ${err.message}`);
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur lors du calcul des statistiques",
-    });
+    return res.status(500).json({ ok: false, error: "Erreur lors du calcul des statistiques" });
   }
 });
 
@@ -2758,10 +2395,7 @@ app.get("/api/stats", async (req, res) => {
 app.get("/api/stats/daily", (req, res) => {
   try {
     let range = (req.query.range || "7").toString().toLowerCase();
-
-    if (!["7", "30", "all"].includes(range)) {
-      range = "7";
-    }
+    if (!["7", "30", "all"].includes(range)) range = "7";
 
     let whereClause = "";
     const params = [];
@@ -2798,9 +2432,7 @@ app.get("/api/stats/daily", (req, res) => {
     const rows = db.prepare(sql).all(...params);
 
     const points = rows.map((r) => {
-      const dbSizeMb = r.db_size_bytes
-        ? r.db_size_bytes / (1024 * 1024)
-        : 0;
+      const dbSizeMb = r.db_size_bytes ? r.db_size_bytes / (1024 * 1024) : 0;
 
       return {
         date: r.date_key,
@@ -2820,17 +2452,10 @@ app.get("/api/stats/daily", (req, res) => {
       };
     });
 
-    return res.json({
-      ok: true,
-      range,
-      points,
-    });
+    return res.json({ ok: true, range, points });
   } catch (err) {
     logError("STATS_DAILY", `Erreur API /api/stats/daily: ${err.message}`);
-    return res.status(500).json({
-      ok: false,
-      error: "Erreur pendant la récupération des statistiques",
-    });
+    return res.status(500).json({ ok: false, error: "Erreur pendant la récupération des statistiques" });
   }
 });
 
@@ -2843,14 +2468,16 @@ app.listen(PORT, () => {
   logInfo("SERVER", `Base SQLite : ${DB_PATH}`);
   logInfo("SERVER", `Fichier de logs : ${LOG_FILE}`);
 
+  // ✅ NOUVEAU : charger lastSyncAt depuis la DB au boot
+  lastSyncAt = loadLastSyncAtFromDb();
+  logInfo("SYNC", `Dernière sync (DB): ${lastSyncAt || "Aucune"}`);
+
   const initialInterval = loadSyncIntervalFromDb();
   schedulePeriodicSync(initialInterval);
+  scheduleDailyPosterCleanup();
 
   retentionDays = loadRetentionDaysFromDb();
   logInfo("PURGE_CFG", `Durée de rétention active: ${retentionDays} jours`);
 
-  syncAllCategories().catch((e) =>
-    logError("SYNC_INIT", `Erreur: ${e.message}`)
-  );
+  syncAllCategories().catch((e) => logError("SYNC_INIT", `Erreur: ${e.message}`));
 });
-
