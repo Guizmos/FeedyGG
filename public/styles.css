@@ -1425,7 +1425,6 @@ body.cards-size-large .btn {
   inset: 0;
   background: rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(8px);
-  z-index: 90;
 }
 
 .settings-modal {
@@ -1451,7 +1450,6 @@ body.cards-size-large .btn {
 
   opacity: 0;
   pointer-events: none;
-  z-index: 100;
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
@@ -3065,6 +3063,32 @@ body.no-scroll {
 .settings-modal {
   padding-bottom: 5px !important;
 }
+
+/* =========================
+   MODAL STACK (z-index)
+   ========================= */
+
+#settings-overlay { z-index: 1000; }
+#settings-modal   { z-index: 1001; }
+
+#missing-posters-overlay { z-index: 1100; }
+#missing-posters-modal   { z-index: 1101; }
+
+#edit-overlay { z-index: 1200; }
+#edit-modal   { z-index: 1201; }
+
+#poster-overlay { z-index: 1300; }
+#poster-modal   { z-index: 1301; }
+
+#details-overlay { z-index: 1400; }
+#details-modal   { z-index: 1401; }
+
+#stats-overlay { z-index: 1500; }
+#stats-modal   { z-index: 1501; }
+
+#logs-overlay { z-index: 1600; }
+#logs-modal   { z-index: 1601; }
+
 
 /* ====================================================================== */
 /* RESPONSIVE                                                             */

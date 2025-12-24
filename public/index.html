@@ -124,6 +124,15 @@
 
     <div class="settings-layout">
       <nav class="settings-sidebar">
+
+        <button class="settings-nav-item" data-section="posters">
+          <span class="settings-nav-icon material-symbols-rounded">photo_library</span>
+          <div class="settings-nav-text">
+            <span class="settings-nav-label">Affiches</span>
+            <span class="settings-nav-sub">Cache &amp; affiches manquantes</span>
+          </div>
+        </button>
+
         <button class="settings-nav-item active" data-section="theme">
           <span class="settings-nav-icon material-symbols-rounded">dark_mode</span>
           <div class="settings-nav-text">
@@ -174,6 +183,71 @@
       </nav>
 
       <div class="settings-content">
+        <section class="settings-section" data-section="posters">
+          <h3 class="settings-section-title">Affiches</h3>
+          <p class="settings-section-desc">
+            Gérer le cache des affiches et retrouver les cartes qui n'ont pas de pochette.
+          </p>
+
+          <!-- Nettoyage des affiches -->
+          <div class="settings-row settings-row-danger">
+            <div class="settings-row-main">
+              <span class="settings-icon settings-icon-danger material-symbols-rounded">
+                image_not_supported
+              </span>
+              <div class="settings-text">
+                <span class="settings-label">Nettoyage des affiches</span>
+                <div class="settings-subtitle">
+                  Supprime les fichiers d'affiches qui ne sont plus liés à aucun élément.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <button id="cleanup-posters-btn" class="btn-clean-posters">
+                Nettoyer
+              </button>
+            </div>
+          </div>
+
+          <!-- Affiches en cache -->
+          <div class="settings-row posters-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">photo_library</span>
+              <div class="settings-text">
+                <span class="settings-label">Affiches en cache</span>
+                <div class="settings-subtitle">
+                  Nombre de fichiers d'affiches présents en local.
+                </div>
+              </div>
+            </div>
+            <div class="settings-center">
+              <span id="posters-count" class="settings-label posters-count">—</span>
+            </div>
+          </div>
+
+          <!-- Cartes sans affiche -->
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <span class="settings-icon material-symbols-rounded">hide_image</span>
+              <div class="settings-text">
+                <span class="settings-label">Cartes sans affiche</span>
+                <div class="settings-subtitle">
+                  Voir les éléments qui n'ont pas de pochette.
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-center" style="gap:10px; display:flex; align-items:center; justify-content:flex-end;">
+              <span id="missing-posters-count" class="settings-label posters-count">—</span>
+              <button id="open-missing-posters" class="btn-logs">
+                Afficher
+              </button>
+            </div>
+          </div>
+
+          <p id="cleanup-posters-status" class="settings-hint"></p>
+        </section>
+
         <section class="settings-section active" data-section="theme">
           <h3 class="settings-section-title">Thème</h3>
           <p class="settings-section-desc">
@@ -359,24 +433,6 @@
             </div>
           </div>
 
-          <div class="settings-row settings-row-danger">
-            <div class="settings-row-main">
-              <span class="settings-icon settings-icon-danger material-symbols-rounded">
-                image_not_supported
-              </span>
-              <div class="settings-text">
-                <span class="settings-label">Nettoyage des affiches</span>
-                <div class="settings-subtitle">
-                  Supprime les fichiers d'affiches qui ne sont plus liés à aucun élément.
-                </div>
-              </div>
-            </div>
-            <div class="settings-center">
-              <button id="cleanup-posters-btn" class="btn-clean-posters">
-                Nettoyer
-              </button>
-            </div>
-          </div>
 
           <div class="settings-row">
             <div class="settings-row-main">
@@ -394,23 +450,6 @@
               </button>
             </div>
           </div>
-
-          <div class="settings-row posters-row">
-            <div class="settings-row-main">
-              <span class="settings-icon material-symbols-rounded">photo_library</span>
-              <div class="settings-text">
-                <span class="settings-label">Affiches en cache</span>
-                <div class="settings-subtitle">
-                  Nombre de fichiers d'affiches présents en local.
-                </div>
-              </div>
-            </div>
-            <div class="settings-center">
-              <span id="posters-count" class="settings-label posters-count">—</span>
-            </div>
-          </div>
-
-          <p id="cleanup-posters-status" class="settings-hint"></p>
         </section>
 
       </div>
@@ -478,6 +517,19 @@
 
     <div class="settings-footer">
       <button id="close-stats" class="btn-close">Fermer</button>
+    </div>
+  </div>
+
+  <div id="missing-posters-overlay" class="settings-overlay hidden"></div>
+  <div id="missing-posters-modal" class="settings-modal logs-modal hidden">
+    <h2>Cartes sans affiche</h2>
+
+    <div id="missing-posters-content" class="logs-content">
+      Chargement…
+    </div>
+
+    <div class="settings-footer">
+      <button id="close-missing-posters" class="btn-close">Fermer</button>
     </div>
   </div>
 

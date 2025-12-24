@@ -1,3 +1,7 @@
+function logInfo(tag, msg){ console.log(`[${tag}]`, msg); }
+function logWarn(tag, msg){ console.warn(`[${tag}]`, msg); }
+function logError(tag, msg){ console.error(`[${tag}]`, msg); }
+
 let favoritesSet = new Set();
 
 async function loadFavoritesFromApi() {
@@ -156,6 +160,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const closeStatsBtn = document.getElementById("close-stats");
   const statsTabs = document.querySelectorAll(".stats-tab");
   const statsRangeTabs = document.querySelectorAll(".stats-range-tab");
+  const openMissingPostersBtn = document.getElementById("open-missing-posters");
+  const missingPostersBtn = document.getElementById("open-missing-posters");
+  const missingPostersOverlay = document.getElementById("missing-posters-overlay");
+  const missingPostersModal = document.getElementById("missing-posters-modal");
+  const closeMissingPostersBtn = document.getElementById("close-missing-posters");
+  const missingPostersContent = document.getElementById("missing-posters-content");
+  const missingPostersCountEl = document.getElementById("missing-posters-count");
+
 
   let activeSettingsSection = "theme";
   let currentDateFilterDays = null;
@@ -921,6 +933,7 @@ function resetScrollLock() {
     }
   }
 
+
   async function refreshPosterForItem(item, buttonEl) {
     // Nouveau comportement : on ouvre un picker propre (type Gamify)
     if (!item || !item.guid) return;
@@ -1677,8 +1690,10 @@ function resetScrollLock() {
     modal.classList.remove("hidden");
     requestAnimationFrame(() => modal.classList.add("show"));
     lockScroll();
+    setActiveSettingsSection("posters");
     refreshPostersCount();
     updateLastSyncStatus();
+    refreshMissingPostersCount();
   }
 
   function closeSettings() {
@@ -1785,6 +1800,86 @@ function resetScrollLock() {
       closeLogs();
     }
   });
+
+async function fetchMissingPosters() {
+  const res = await fetch("/api/posters/missing?mode=list&limit=300", { cache: "no-cache" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+
+async function refreshMissingPostersCount() {
+  if (!missingPostersCountEl) return;
+
+  try {
+    const res = await fetch("/api/posters/missing?mode=count", { cache: "no-cache" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    // ton serveur renvoie plutôt "total" (d’après ton ancien code)
+    const n = Number(data.total ?? data.count ?? 0);
+    missingPostersCountEl.textContent = Number.isFinite(n) ? n.toLocaleString("fr-FR") : "—";
+  } catch (err) {
+    console.error("refreshMissingPostersCount:", err);
+    missingPostersCountEl.textContent = "—";
+  }
+}
+
+
+function renderMissingPostersCards(items) {
+  if (!missingPostersContent) return;
+
+  if (!items || !items.length) {
+    missingPostersContent.innerHTML = `<div class="empty">Aucune carte sans affiche 🎉</div>`;
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "cards-grid";
+
+  items.forEach((item) => {
+    grid.appendChild(createCard(item)); // ✅ mêmes cartes que la page principale
+  });
+
+  missingPostersContent.innerHTML = "";
+  missingPostersContent.appendChild(grid);
+}
+
+async function openMissingPostersModal() {
+  if (!missingPostersOverlay || !missingPostersModal || !missingPostersContent) return;
+
+  // option: mettre la settings modal derrière comme les logs
+  if (modal) modal.classList.add("settings-modal-behind-logs");
+
+  missingPostersOverlay.classList.remove("hidden");
+  missingPostersModal.classList.remove("hidden");
+  requestAnimationFrame(() => missingPostersModal.classList.add("show"));
+  lockScroll();
+
+  missingPostersContent.textContent = "Chargement…";
+
+  try {
+    const items = await fetchMissingPosters();
+    renderMissingPostersCards(items);
+  } catch (err) {
+    console.error("Missing posters:", err);
+    missingPostersContent.textContent = "Erreur lors du chargement.";
+  }
+}
+
+function closeMissingPostersModal() {
+  if (!missingPostersOverlay || !missingPostersModal) return;
+
+  missingPostersModal.classList.remove("show");
+  setTimeout(() => {
+    missingPostersOverlay.classList.add("hidden");
+    missingPostersModal.classList.add("hidden");
+    unlockScroll();
+
+    if (modal) modal.classList.remove("settings-modal-behind-logs");
+  }, 200);
+}
 
 // ---------------------------------------------------------------------------
 // Stats Popup + Graphiques
@@ -2251,6 +2346,22 @@ statsOverlay?.addEventListener("click", (e) => {
   }
 });
 
+  openMissingPostersBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    openMissingPostersModal();
+  });
+
+  closeMissingPostersBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    closeMissingPostersModal();
+  });
+
+  missingPostersOverlay?.addEventListener("click", (e) => {
+    if (e.target === missingPostersOverlay) {
+      closeMissingPostersModal();
+    }
+  });
+
 statsTabs.forEach((tab) => {
   tab.addEventListener("click", (e) => {
     e.preventDefault();
@@ -2565,42 +2676,6 @@ statsRangeTabs.forEach((tab) => {
     }
   }
 
-  async function updateLastSyncText() {
-    if (!lastSyncTextEl) return;
-
-    try {
-      const res = await fetch("/api/status");
-      if (!res.ok) throw new Error("HTTP " + res.status);
-
-      const data = await res.json();
-
-      if (!data.lastSyncAt) {
-        lastSyncTextEl.textContent =
-          "Date de la dernière synchronisation : inconnue";
-        return;
-      }
-
-      const d = new Date(data.lastSyncAt);
-      if (Number.isNaN(d.getTime())) {
-        lastSyncTextEl.textContent =
-          "Date de la dernière synchronisation : inconnue";
-        return;
-      }
-
-      const formatted = d.toLocaleString("fr-FR", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-
-      lastSyncTextEl.textContent =
-        "Date de la dernière synchronisation : " + formatted;
-    } catch (err) {
-      console.error("Erreur updateLastSyncText:", err);
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Dernière synchronisation (status backend)
@@ -2718,45 +2793,10 @@ statsRangeTabs.forEach((tab) => {
 
     cleanupPostersStatus.textContent = "Nettoyage en cours…";
 
-    // ==========================
-    // SAFETY GUARD (anti-carnage)
-    // ==========================
-    let fsTotal = 0;
-    try {
-      if (fs.existsSync(POSTERS_DIR)) {
-        const entries = fs.readdirSync(POSTERS_DIR, { withFileTypes: true });
-        fsTotal = entries.filter(e => e.isFile() && /\.(jpg|jpeg|png|webp)$/i.test(e.name)).length;
-      }
-    } catch (e) {
-      logError("POSTERS_CLEANUP", `Erreur comptage FS: ${e.message}`);
-    }
-
-    let dbTotal = 0;
-    try {
-      const r = db.prepare(`SELECT COUNT(*) AS cnt FROM posters`).get();
-      dbTotal = r ? (r.cnt || 0) : 0;
-    } catch (e) {
-      logError("POSTERS_CLEANUP", `Erreur comptage DB posters: ${e.message}`);
-    }
-
-    // Si la DB n'est pas "alignée", on bloque la phase 2.
-    // Exemple typique: tu as 1200 fichiers, mais 90 en DB => phase2 = massacre.
-    if (fsTotal > 50) {
-      const ratio = dbTotal / fsTotal;
-
-      if (dbTotal === 0 || ratio < 0.30) {
-        logWarn(
-          "POSTERS_CLEANUP",
-          `ABORT PHASE2: DB posters trop faible (${dbTotal}) vs FS (${fsTotal}) ratio=${ratio.toFixed(2)}`
-        );
-        return { dbRemoved, fsRemoved, aborted: true, reason: "db_vs_fs_ratio" };
-      }
-    }
-
     try {
       const res = await fetch("/api/admin/posters/cleanup-orphans", { method: "POST" });
 
-      // On lit TOUJOURS le JSON si possible (même en 409)
+      // On tente de lire le JSON même si erreur
       let data = null;
       try {
         data = await res.json();
@@ -2764,28 +2804,31 @@ statsRangeTabs.forEach((tab) => {
         data = null;
       }
 
+      // Cas garde-fou serveur (ex: 409 aborted)
       if (!res.ok) {
-        const msg = (data && data.error) ? data.error : ("HTTP " + res.status);
+        const msg =
+          (data && (data.error || data.message)) ? (data.error || data.message) : ("HTTP " + res.status);
         throw new Error(msg);
       }
 
-      const db = Number(data.dbRemoved);
-      const fs = Number(data.fsRemoved);
-      const total = (Number.isFinite(db) ? db : 0) + (Number.isFinite(fs) ? fs : 0);
+      const dbRemoved = Number(data?.dbRemoved || 0);
+      const fsRemoved = Number(data?.fsRemoved || 0);
+      const total = dbRemoved + fsRemoved;
 
-      if (data.ok) {
-        if (total === 0) cleanupPostersStatus.textContent = "Aucune affiche orpheline à supprimer.";
-        else cleanupPostersStatus.textContent = `Nettoyage OK : DB=${db || 0}, fichiers=${fs || 0}`;
+      if (total === 0) {
+        cleanupPostersStatus.textContent = "Aucune affiche orpheline à supprimer.";
       } else {
-        cleanupPostersStatus.textContent = data?.error || "Erreur pendant le nettoyage.";
+        cleanupPostersStatus.textContent = `Nettoyage OK : DB=${dbRemoved}, fichiers=${fsRemoved}`;
       }
     } catch (err) {
       console.error("cleanupOrphanPosters:", err);
-      cleanupPostersStatus.textContent = err.message || "Erreur réseau lors du nettoyage des affiches.";
+      cleanupPostersStatus.textContent =
+        (err && err.message) ? err.message : "Erreur réseau lors du nettoyage des affiches.";
     }
 
     await refreshPostersCount();
   }
+
 
   // ---------------------------------------------------------------------------
   // Sync global / refresh
@@ -2800,7 +2843,6 @@ statsRangeTabs.forEach((tab) => {
       if (res.status === 409) {
         console.warn("Sync déjà en cours, on recharge seulement le feed.");
         await loadFeed({ useMinSkeleton: !silent });
-        await updateLastSyncText();
         await refreshPostersCount();
         return;
       }
@@ -2812,7 +2854,6 @@ statsRangeTabs.forEach((tab) => {
           errorEl.classList.remove("hidden");
         }
         await loadFeed({ useMinSkeleton: !silent });
-        await updateLastSyncText();
         return;
       }
 
@@ -2824,7 +2865,6 @@ statsRangeTabs.forEach((tab) => {
       }
 
       await loadFeed({ useMinSkeleton: !silent });
-      await updateLastSyncText();
     } catch (err) {
       console.error("triggerFullRefresh error:", err);
       if (!silent && errorEl) {
@@ -2833,7 +2873,6 @@ statsRangeTabs.forEach((tab) => {
         errorEl.classList.remove("hidden");
       }
       await loadFeed({ useMinSkeleton: !silent });
-      await updateLastSyncText();
       await refreshPostersCount();
     } finally {
       updateLastSyncStatus();
@@ -3055,6 +3094,11 @@ statsRangeTabs.forEach((tab) => {
       return;
     }
 
+    if (missingPostersModal && !missingPostersModal.classList.contains("hidden") && missingPostersModal.classList.contains("show")) {
+      closeMissingPostersModal();
+      return;
+    }
+
     if (modal && !modal.classList.contains("hidden") && modal.classList.contains("show")) {
       closeSettings();
       return;
@@ -3069,6 +3113,7 @@ statsRangeTabs.forEach((tab) => {
       closeDateFilterPanel();
       return;
     }
+
   });
 
   categorySelect?.addEventListener("change", (e) => {
@@ -3165,7 +3210,6 @@ statsRangeTabs.forEach((tab) => {
 
     await loadFeed();
     await initVersionFooter();
-    await updateLastSyncText();
     await updateLastSyncStatus();
   })();
 });

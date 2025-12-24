@@ -2713,17 +2713,36 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
       logWarn("POSTERS_REFRESH", `Impossible de calculer poster_ref: ${e.message}`);
     }
 
-
+    // 1) update la carte ciblée
     db.prepare(`
       UPDATE items
       SET poster = ?, poster_ref = ?, updated_at = ?
       WHERE guid = ?
     `).run(finalPoster, newPosterRef, now, guid);
 
+    // 2) propagation aux autres cartes : même category + même title
+    const sameTitle = (item.title || "").trim();
+    let updatedOthers = 0;
 
-    logInfo("POSTERS_REFRESH", `Pochette mise à jour (final) pour guid=${guid}, cat=${normCat}, titre="${searchTitle}" → ${finalPoster}`);
+    if (sameTitle) {
+      const info2 = db.prepare(`
+        UPDATE items
+        SET poster = ?, poster_ref = ?, updated_at = ?
+        WHERE category = ?
+          AND title = ?
+          AND guid != ?
+      `).run(finalPoster, newPosterRef, now, normCat, sameTitle, guid);
 
-    return res.json({ ok: true, poster: finalPoster });
+      updatedOthers = info2.changes || 0;
+    }
+
+    logInfo(
+      "POSTERS_REFRESH",
+      `Pochette mise à jour guid=${guid}, cat=${normCat}, titre="${searchTitle}" → ${finalPoster} (propagé=${updatedOthers})`
+    );
+
+    return res.json({ ok: true, poster: finalPoster, updatedOthers });
+
   } catch (err) {
     logError("POSTERS_REFRESH", `Erreur rafraîchissement pochette (guid=${rawGuid}): ${err.message}`);
     return res.status(500).json({ ok: false, error: "Erreur serveur pendant le rafraîchissement de la pochette" });
@@ -2845,7 +2864,7 @@ app.post("/api/posters/apply/:guid", async (req, res) => {
 
   try {
     const item = db.prepare(`
-      SELECT guid, category
+      SELECT guid, category, title
       FROM items
       WHERE guid = ?
     `).get(guid);
@@ -2868,14 +2887,38 @@ app.post("/api/posters/apply/:guid", async (req, res) => {
       logWarn("POSTERS_APPLY", `Cache local impossible: ${e.message}`);
     }
 
+    const now = Date.now();
+
+    // 1) update la carte ciblée
     db.prepare(`
       UPDATE items
       SET poster = ?, poster_ref = ?, updated_at = ?
       WHERE guid = ?
-    `).run(finalPoster, posterRef, Date.now(), guid);
+    `).run(finalPoster, posterRef, now, guid);
 
-    logInfo("POSTERS_APPLY", `Pochette appliquée guid=${guid} cat=${normCat} → ${finalPoster}`);
-    return res.json({ ok: true, poster: finalPoster });
+    // 2) propagation aux autres cartes : même category + même title
+    const sameTitle = (item.title || "").trim();
+    let updatedOthers = 0;
+
+    if (sameTitle) {
+      const info2 = db.prepare(`
+        UPDATE items
+        SET poster = ?, poster_ref = ?, updated_at = ?
+        WHERE category = ?
+          AND title = ?
+          AND guid != ?
+      `).run(finalPoster, posterRef, now, normCat, sameTitle, guid);
+
+      updatedOthers = info2.changes || 0;
+    }
+
+    logInfo(
+      "POSTERS_APPLY",
+      `Pochette appliquée guid=${guid} cat=${normCat} → ${finalPoster} (propagé=${updatedOthers})`
+    );
+
+    return res.json({ ok: true, poster: finalPoster, updatedOthers });
+
   } catch (err) {
     logError("POSTERS_APPLY", `Erreur: ${err.message}`);
     return res.status(500).json({ ok: false, error: "Erreur serveur" });
@@ -2951,6 +2994,58 @@ app.get("/api/posters/stats", async (req, res) => {
   } catch (err) {
     logError("POSTERS_STATS", `Erreur API /api/posters/stats: ${err.message}`);
     return res.status(500).json({ ok: false, error: "Erreur pendant le comptage des affiches" });
+  }
+});
+
+// ============================================================================
+// API : CARTES SANS AFFICHE (compteur + liste)
+// ============================================================================
+
+app.get("/api/posters/missing/count", (req, res) => {
+  try {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM items
+      WHERE poster IS NULL OR TRIM(poster) = ''
+    `).get();
+
+    return res.json({ ok: true, total: row?.cnt || 0 });
+  } catch (err) {
+    logError("POSTERS_MISSING", `Erreur /api/posters/missing/count: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur" });
+  }
+});
+
+app.get("/api/posters/missing", (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM items
+      WHERE poster IS NULL OR TRIM(poster) = ''
+    `).get();
+    const total = totalRow?.cnt || 0;
+
+    const items = db.prepare(`
+      SELECT
+        guid,
+        category,
+        title,
+        raw_title AS rawTitle,
+        added_at AS addedAt,
+        added_at_ts AS addedAtTs
+      FROM items
+      WHERE poster IS NULL OR TRIM(poster) = ''
+      ORDER BY added_at_ts DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+
+    return res.json({ ok: true, total, limit, offset, items });
+  } catch (err) {
+    logError("POSTERS_MISSING", `Erreur /api/posters/missing: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur" });
   }
 });
 
