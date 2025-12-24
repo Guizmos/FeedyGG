@@ -1162,6 +1162,48 @@ async function tmdbSearch(pathUrl, params) {
   }
 }
 
+// Retourne une liste de résultats (au lieu du « best poster ») pour construire un picker côté UI
+async function tmdbSearchList(pathUrl, params, limit = 12) {
+  incTmdbCalls();
+  const url = new URL(`${TMDB_BASE_URL}${pathUrl}`);
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  });
+
+  logInfo("TMDB_CALL", `Search(list) ${pathUrl} → ${url.toString()}`);
+
+  try {
+    const resp = await fetch(url.toString());
+    if (!resp.ok) {
+      logWarn("TMDB_HTTP", `HTTP ${resp.status} ${url.toString()}`);
+      return [];
+    }
+
+    const data = await resp.json();
+    const results = Array.isArray(data.results) ? data.results : [];
+    const out = [];
+
+    for (const r of results) {
+      if (!r || !r.poster_path) continue;
+      const title = r.title || r.name || r.original_title || r.original_name || "";
+      const date = r.release_date || r.first_air_date || "";
+      const year = date && typeof date === "string" ? date.slice(0, 4) : "";
+      out.push({
+        id: r.id,
+        title: title || "(sans titre)",
+        year: year || null,
+        posterUrl: `https://image.tmdb.org/t/p/w342${r.poster_path}`,
+      });
+      if (out.length >= limit) break;
+    }
+
+    return out;
+  } catch (err) {
+    logError("TMDB", `Erreur: ${err.message} ${url.toString()}`);
+    return [];
+  }
+}
+
 async function fetchPosterForTitle(rawTitle, categoryRaw) {
   if (!TMDB_API_KEY || !rawTitle) return null;
 
@@ -1354,6 +1396,67 @@ async function igdbSearchGame(title) {
   } catch (err) {
     logError("IGDB", `Erreur recherche IGDB pour "${title}": ${err.message}`);
     return null;
+  }
+}
+
+// Liste de résultats IGDB (pour choisir une cover manuellement)
+async function igdbSearchGamesList(title, limit = 12) {
+  const token = await getIgdbToken();
+  if (!token) return [];
+
+  incIgdbCalls();
+
+  const safeTitle = String(title || "").replace(/"/g, '\\"');
+  const lim = Math.max(1, Math.min(50, Number(limit) || 12));
+
+  const query = [
+    `search "${safeTitle}";`,
+    "fields name, cover.image_id, first_release_date;",
+    `limit ${lim};`,
+  ].join(" ");
+
+  logInfo("IGDB_CALL", `Search(list) "${safeTitle}" (limit=${lim})`);
+
+  try {
+    const resp = await fetch(`${IGDB_BASE_URL}/games`, {
+      method: "POST",
+      headers: {
+        "Client-ID": IGDB_CLIENT_ID,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "text/plain",
+      },
+      body: query,
+    });
+
+    if (!resp.ok) {
+      logWarn("IGDB_HTTP", `HTTP ${resp.status} pour "${safeTitle}"`);
+      return [];
+    }
+
+    const games = await resp.json();
+    if (!Array.isArray(games) || games.length === 0) return [];
+
+    const out = [];
+    for (const g of games) {
+      if (!g) continue;
+      const coverId = g.cover && g.cover.image_id ? String(g.cover.image_id) : null;
+      if (!coverId) continue;
+      const year = g.first_release_date
+        ? new Date(Number(g.first_release_date) * 1000).getUTCFullYear()
+        : null;
+      out.push({
+        id: g.id,
+        title: g.name || "(sans titre)",
+        year: year && !Number.isNaN(year) ? String(year) : null,
+        posterUrl: `https://images.igdb.com/igdb/image/upload/t_cover_big/${coverId}.jpg`,
+      });
+      if (out.length >= lim) break;
+    }
+
+    return out;
+  } catch (err) {
+    logError("IGDB", `Erreur recherche IGDB(list) pour "${title}": ${err.message}`);
+    return [];
   }
 }
 
@@ -2624,6 +2727,158 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
   } catch (err) {
     logError("POSTERS_REFRESH", `Erreur rafraîchissement pochette (guid=${rawGuid}): ${err.message}`);
     return res.status(500).json({ ok: false, error: "Erreur serveur pendant le rafraîchissement de la pochette" });
+  }
+});
+
+// ============================================================================
+// API : rechercher des pochettes candidates pour un item (picker)
+// ============================================================================
+
+app.get("/api/posters/search/:guid", async (req, res) => {
+  const rawGuid = req.params.guid || "";
+  let guid;
+
+  try {
+    guid = decodeURIComponent(rawGuid);
+  } catch {
+    return res.status(400).json({ ok: false, error: "GUID invalide" });
+  }
+
+  const q = (req.query.q || "").toString().trim();
+  const limit = req.query.limit ? parseInt(req.query.limit, 10) : 12;
+
+  if (!guid) return res.status(400).json({ ok: false, error: "GUID manquant" });
+
+  try {
+    const item = db.prepare(`
+      SELECT guid, category, raw_title, title
+      FROM items
+      WHERE guid = ?
+    `).get(guid);
+
+    if (!item) return res.status(404).json({ ok: false, error: "Item introuvable" });
+
+    const normCat = normalizeCategoryKey(item.category || "film");
+    const isGame = normCat === "games";
+
+    const searchTitle = (q || item.title || item.raw_title || "").toString().trim();
+    if (!searchTitle) return res.status(400).json({ ok: false, error: "Titre introuvable" });
+
+    const out = [];
+
+    if (isGame) {
+      const rows = await igdbSearchGamesList(searchTitle, limit);
+      rows.forEach((r) => {
+        out.push({
+          provider: "igdb",
+          mediaType: "game",
+          id: r.id,
+          title: r.title,
+          year: r.year,
+          posterUrl: r.posterUrl,
+          sourceUrl: r.id ? `https://www.igdb.com/games/${r.id}` : null,
+        });
+      });
+    } else {
+      if (!TMDB_API_KEY) return res.status(500).json({ ok: false, error: "TMDB_API_KEY non configuré" });
+
+      const kind = normCat === "series" || normCat === "emissions" ? "series" : "film";
+      const tmdbType = kind === "series" ? "tv" : "movie";
+      const guessKind = kind;
+
+      const { cleanTitle, year } = guessTitleAndYear(searchTitle, guessKind);
+      const base = cleanTitle && cleanTitle.length ? cleanTitle : searchTitle.replace(/[._]/g, " ").trim();
+
+      const params = {
+        api_key: TMDB_API_KEY,
+        language: "fr-FR",
+        query: base,
+        include_adult: "false",
+      };
+
+      if (year) {
+        if (tmdbType === "movie") params.year = year;
+        else params.first_air_date_year = year;
+      }
+
+      const rows = await tmdbSearchList(`/search/${tmdbType}`, params, limit);
+      rows.forEach((r) => {
+        out.push({
+          provider: "tmdb",
+          mediaType: tmdbType,
+          id: r.id,
+          title: r.title,
+          year: r.year,
+          posterUrl: r.posterUrl,
+          sourceUrl: r.id ? `https://www.themoviedb.org/${tmdbType}/${r.id}` : null,
+        });
+      });
+    }
+
+    return res.json({ ok: true, query: searchTitle, results: out });
+  } catch (err) {
+    logError("POSTERS_SEARCH", `Erreur: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur" });
+  }
+});
+
+// ============================================================================
+// API : appliquer une pochette choisie (picker)
+// ============================================================================
+
+app.post("/api/posters/apply/:guid", async (req, res) => {
+  const rawGuid = req.params.guid || "";
+  let guid;
+
+  try {
+    guid = decodeURIComponent(rawGuid);
+  } catch {
+    return res.status(400).json({ ok: false, error: "GUID invalide" });
+  }
+
+  const remoteUrl = (req.body && req.body.posterUrl ? req.body.posterUrl : req.body && req.body.remoteUrl)
+    ? String(req.body.posterUrl || req.body.remoteUrl).trim()
+    : "";
+
+  if (!guid) return res.status(400).json({ ok: false, error: "GUID manquant" });
+  if (!remoteUrl) return res.status(400).json({ ok: false, error: "posterUrl manquant" });
+
+  try {
+    const item = db.prepare(`
+      SELECT guid, category
+      FROM items
+      WHERE guid = ?
+    `).get(guid);
+
+    if (!item) return res.status(404).json({ ok: false, error: "Item introuvable" });
+
+    const normCat = normalizeCategoryKey(item.category || "film");
+
+    let finalPoster = remoteUrl;
+    let posterRef = null;
+
+    try {
+      const params = buildPosterCacheParamsFromItem({ category: normCat, poster: remoteUrl });
+      if (params) {
+        posterRef = makePosterRef(params.provider, params.mediaType, String(params.externalId));
+        const localUrl = await ensureLocalPoster(params);
+        if (localUrl) finalPoster = localUrl;
+      }
+    } catch (e) {
+      logWarn("POSTERS_APPLY", `Cache local impossible: ${e.message}`);
+    }
+
+    db.prepare(`
+      UPDATE items
+      SET poster = ?, poster_ref = ?, updated_at = ?
+      WHERE guid = ?
+    `).run(finalPoster, posterRef, Date.now(), guid);
+
+    logInfo("POSTERS_APPLY", `Pochette appliquée guid=${guid} cat=${normCat} → ${finalPoster}`);
+    return res.json({ ok: true, poster: finalPoster });
+  } catch (err) {
+    logError("POSTERS_APPLY", `Erreur: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur serveur" });
   }
 });
 

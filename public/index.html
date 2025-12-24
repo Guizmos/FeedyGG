@@ -529,6 +529,40 @@
     </div>
   </div>
 
+  <!-- ================================================================ -->
+  <!-- POSTER PICKER (choisir une pochette)                             -->
+  <!-- ================================================================ -->
+
+  <div id="poster-overlay" class="poster-overlay hidden">
+    <div id="poster-modal" class="poster-modal">
+      <div class="poster-head">
+        <div>
+          <h2 class="poster-title">Choisir une pochette</h2>
+          <div id="poster-picker-title" class="poster-subtitle"></div>
+        </div>
+        <button id="poster-close-btn" class="poster-close" type="button" title="Fermer">
+          <span class="material-symbols-rounded">close</span>
+        </button>
+      </div>
+
+      <div class="poster-search">
+        <div class="poster-search__input">
+          <span class="material-symbols-rounded">search</span>
+          <input id="poster-query" type="text" placeholder="Rechercher…" />
+        </div>
+        <button id="poster-search-btn" class="btn btn-secondary" type="button">Rechercher</button>
+      </div>
+
+      <div id="poster-status" class="poster-status"></div>
+
+      <div id="poster-results" class="poster-results"></div>
+
+      <div class="poster-footer">
+        <button id="poster-cancel-btn" class="btn btn-secondary" type="button">Annuler</button>
+      </div>
+    </div>
+  </div>
+
   <div id="edit-overlay" class="edit-overlay hidden">
     <div id="edit-modal" class="edit-modal">
       <h2 class="edit-modal-title">Modifier le titre</h2>

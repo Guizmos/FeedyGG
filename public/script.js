@@ -692,7 +692,7 @@ function resetScrollLock() {
       const menuRefresh = document.createElement("button");
       menuRefresh.type = "button";
       menuRefresh.className = "card-menu-item";
-      menuRefresh.textContent = "Rafraîchir la pochette";
+      menuRefresh.textContent = "Pochette";
       menuRefresh.addEventListener("click", (e) => {
         e.stopPropagation();
         refreshPosterForItem(item, menuRefresh);
@@ -922,44 +922,200 @@ function resetScrollLock() {
   }
 
   async function refreshPosterForItem(item, buttonEl) {
+    // Nouveau comportement : on ouvre un picker propre (type Gamify)
     if (!item || !item.guid) return;
+    openPosterPickerModal(item);
+  }
 
-    const safeBtn = buttonEl || { disabled: false, textContent: "" };
-    const oldText = safeBtn.textContent;
+  // ======================================================================
+  // POSTER PICKER (choix de pochette)
+  // ======================================================================
 
-    if (buttonEl) {
-      buttonEl.disabled = true;
-      buttonEl.textContent = "Rafraîchissement…";
-    }
+  let currentPosterItem = null;
 
-    try {
-      const res = await fetch(`/api/posters/refresh/${encoded}`, {
-        method: "POST",
-      });
+  function openPosterPickerModal(item) {
+    const overlay = document.getElementById("poster-overlay");
+    const modal = document.getElementById("poster-modal");
+    const titleEl = document.getElementById("poster-picker-title");
+    const queryEl = document.getElementById("poster-query");
+    const searchBtn = document.getElementById("poster-search-btn");
+    const closeBtn = document.getElementById("poster-close-btn");
+    const cancelBtn = document.getElementById("poster-cancel-btn");
+    const resultsEl = document.getElementById("poster-results");
 
-      let payload = null;
+    if (!overlay || !modal || !queryEl || !searchBtn || !resultsEl) return;
+
+    currentPosterItem = item;
+    const displayTitle = getDisplayTitle(item);
+    if (titleEl) titleEl.textContent = `Résultats pour : ${displayTitle}`;
+    queryEl.value = displayTitle;
+
+    resultsEl.innerHTML = "";
+    overlay.classList.remove("hidden");
+    modal.classList.add("show");
+    lockScroll();
+
+    const onClose = () => {
+      overlay.classList.add("hidden");
+      modal.classList.remove("show");
+      unlockScroll();
+      currentPosterItem = null;
+    };
+
+    if (closeBtn) closeBtn.onclick = onClose;
+    if (cancelBtn) cancelBtn.onclick = onClose;
+    overlay.onclick = (e) => {
+      if (e.target === overlay) onClose();
+    };
+
+    const doSearch = async () => {
+      const q = queryEl.value.trim();
+      await posterPickerSearch(q);
+    };
+
+    searchBtn.onclick = doSearch;
+    queryEl.onkeydown = (e) => {
+      if (e.key === "Enter") doSearch();
+    };
+
+    // auto-search direct
+    doSearch();
+    setTimeout(() => {
       try {
-        payload = await res.json();
+        queryEl.focus();
+        queryEl.select();
       } catch {
       }
+    }, 50);
+  }
 
-      if (!res.ok || (payload && payload.ok === false)) {
-        const msg =
-          (payload && payload.error) ||
-          `Impossible de rafraîchir la pochette (HTTP ${res.status})`;
-        console.error("Erreur refreshPosterForItem:", msg);
+  async function posterPickerSearch(q) {
+    if (!currentPosterItem || !currentPosterItem.guid) return;
+
+    const resultsEl = document.getElementById("poster-results");
+    const statusEl = document.getElementById("poster-status");
+    const searchBtn = document.getElementById("poster-search-btn");
+
+    if (!resultsEl) return;
+
+    resultsEl.innerHTML = "";
+    if (statusEl) statusEl.textContent = "Recherche…";
+    if (searchBtn) searchBtn.disabled = true;
+
+    try {
+      const encoded = encodeURIComponent(currentPosterItem.guid);
+      const url = new URL(`/api/posters/search/${encoded}`, window.location.origin);
+      if (q) url.searchParams.set("q", q);
+      url.searchParams.set("limit", "14");
+
+      const res = await fetch(url.toString());
+      const payload = await res.json().catch(() => null);
+
+      if (!res.ok || !payload || payload.ok === false) {
+        const msg = (payload && payload.error) || `Erreur recherche pochette (HTTP ${res.status})`;
+        if (statusEl) statusEl.textContent = msg;
+        return;
+      }
+
+      const list = Array.isArray(payload.results) ? payload.results : [];
+      if (!list.length) {
+        if (statusEl) statusEl.textContent = "Aucun résultat.";
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = "";
+      resultsEl.innerHTML = list.map(renderPosterCandidate).join("");
+
+      // bind apply buttons
+      resultsEl.querySelectorAll("[data-poster-url]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const posterUrl = btn.getAttribute("data-poster-url");
+          if (!posterUrl) return;
+          await posterPickerApply(posterUrl, btn);
+        });
+      });
+    } catch (err) {
+      console.error("Erreur posterPickerSearch:", err);
+      if (statusEl) statusEl.textContent = "Impossible de rechercher pour le moment.";
+    } finally {
+      if (searchBtn) searchBtn.disabled = false;
+    }
+  }
+
+  function escapeHtml(str) {
+    return String(str || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderPosterCandidate(r) {
+    const title = escapeHtml(r.title || "");
+    const year = r.year ? `<span class="poster-cand__year">${escapeHtml(r.year)}</span>` : "";
+    const provider = r.provider ? r.provider.toUpperCase() : "";
+    const source = r.sourceUrl
+      ? `<a class="poster-cand__src" href="${escapeHtml(r.sourceUrl)}" target="_blank" rel="noreferrer">${provider}</a>`
+      : `<span class="poster-cand__src">${provider}</span>`;
+    const img = r.posterUrl
+      ? `<img class="poster-cand__img" src="${escapeHtml(r.posterUrl)}" alt="${title}" loading="lazy" />`
+      : `<div class="poster-cand__img poster-cand__img--ph">?</div>`;
+
+    return `
+      <div class="poster-cand">
+        <div class="poster-cand__thumb">${img}</div>
+        <div class="poster-cand__meta">
+          <div class="poster-cand__name">${title}</div>
+          <div class="poster-cand__sub">${source}${year}</div>
+        </div>
+        <button class="btn btn-secondary poster-cand__apply" data-poster-url="${escapeHtml(r.posterUrl || "")}">Appliquer</button>
+      </div>
+    `;
+  }
+
+  async function posterPickerApply(posterUrl, btnEl) {
+    if (!currentPosterItem || !currentPosterItem.guid) return;
+    const old = btnEl ? btnEl.textContent : "";
+
+    try {
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = "Application…";
+      }
+
+      const encoded = encodeURIComponent(currentPosterItem.guid);
+      const res = await fetch(`/api/posters/apply/${encoded}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ posterUrl }),
+      });
+
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload || payload.ok === false) {
+        const msg = (payload && payload.error) || `Impossible d'appliquer la pochette (HTTP ${res.status})`;
         alert(msg);
         return;
       }
 
+      // close modal
+      const overlay = document.getElementById("poster-overlay");
+      const modal = document.getElementById("poster-modal");
+      if (overlay && modal) {
+        overlay.classList.add("hidden");
+        modal.classList.remove("show");
+      }
+      unlockScroll();
+      currentPosterItem = null;
+
       await loadFeed({ useMinSkeleton: false });
     } catch (err) {
-      console.error("Erreur refreshPosterForItem:", err);
-      alert("Impossible de rafraîchir la pochette pour le moment.");
+      console.error("Erreur posterPickerApply:", err);
+      alert("Impossible d'appliquer la pochette pour le moment.");
     } finally {
-      if (buttonEl) {
-        buttonEl.disabled = false;
-        buttonEl.textContent = oldText;
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.textContent = old;
       }
     }
   }
