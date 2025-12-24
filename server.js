@@ -46,6 +46,8 @@ const POSTERS_DIR = process.env.POSTERS_DIR || path.join(path.dirname(DB_PATH), 
 const DEFAULT_SYNC_INTERVAL_MINUTES = 30;
 let currentSyncIntervalMinutes = DEFAULT_SYNC_INTERVAL_MINUTES;
 let syncIntervalHandle = null;
+let dailyCleanupTimeout = null;
+let isCleanupRunning = false;
 
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "yggfeed.log");
 const LOG_MAX_BYTES = Number(process.env.LOG_MAX_BYTES || 5 * 1024 * 1024);
@@ -56,6 +58,7 @@ let retentionDays = DEFAULT_RETENTION_DAYS;
 let lastSyncAt = null;
 let isSyncRunning = false;
 
+const crypto = require("crypto");
 const posterCache = new Map();
 
 // ============================================================================
@@ -351,6 +354,11 @@ function saveLastSyncAtToDb(isoString) {
 
 async function cleanupPostersJob() {
   try {
+    if (isSyncRunning) {
+      logWarn("POSTERS_CLEANUP", "Auto-cleanup reporté: sync en cours.");
+      return;
+    }
+
     const result = cleanupPosterOrphans();
     logInfo("POSTERS_CLEANUP", `Auto-cleanup: DB=${result.dbRemoved}, FS=${result.fsRemoved}`);
   } catch (err) {
@@ -387,19 +395,39 @@ function schedulePeriodicSync(minutes) {
 }
 
 function scheduleDailyPosterCleanup() {
+  // stoppe une éventuelle programmation précédente
+  if (dailyCleanupTimeout) {
+    clearTimeout(dailyCleanupTimeout);
+    dailyCleanupTimeout = null;
+  }
+
   const now = new Date();
 
-  const nextMidnight = new Date();
-  nextMidnight.setHours(24, 0, 0, 0);
+  // Prochain minuit LOCAL (donc dépend de TZ du système/container)
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0); // => demain 00:00:00.000
 
-  const delay = nextMidnight.getTime() - now.getTime();
+  const delayMs = Math.max(1_000, next.getTime() - now.getTime());
 
-  console.log(`[CLEANUP] Premier nettoyage programmé dans ${Math.round(delay / 1000)}s`);
+  logInfo(
+    "POSTERS_CLEANUP",
+    `Prochain auto-cleanup à ${next.toLocaleString("fr-FR")} (dans ${Math.round(delayMs / 1000)}s)`
+  );
 
-  setTimeout(() => {
-    cleanupPostersJob();
-    setInterval(cleanupPostersJob, 24 * 60 * 60 * 1000);
-  }, delay);
+  dailyCleanupTimeout = setTimeout(async () => {
+    if (isCleanupRunning) {
+      logWarn("POSTERS_CLEANUP", "Auto-cleanup ignoré: déjà en cours.");
+    } else {
+      isCleanupRunning = true;
+      try {
+        await cleanupPostersJob();
+      } finally {
+        isCleanupRunning = false;
+      }
+    }
+
+    scheduleDailyPosterCleanup();
+  }, delayMs);
 }
 
 // ============================================================================
@@ -407,6 +435,14 @@ function scheduleDailyPosterCleanup() {
 // ============================================================================
 
 const selectPosterStmt = db.prepare(`
+  SELECT file_path
+  FROM posters
+  WHERE provider = ?
+    AND media_type = ?
+    AND external_id = ?
+`);
+
+const selectPosterFilePathStmt = db.prepare(`
   SELECT file_path
   FROM posters
   WHERE provider = ?
@@ -499,7 +535,7 @@ async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl })
   const now = Date.now();
   const providerKey = String(provider).toLowerCase();
   const mediaTypeKey = String(mediaType).toLowerCase();
-  const externalIdKey = String(externalId);
+  const externalIdKey = String(externalId).toLowerCase();
 
   let row = selectPosterStmt.get(providerKey, mediaTypeKey, externalIdKey);
 
@@ -574,57 +610,112 @@ async function ensureLocalPoster({ provider, mediaType, externalId, remoteUrl })
 function cleanupPostersAfterItemsPurge(deletedItems) {
   if (!Array.isArray(deletedItems) || deletedItems.length === 0) return;
 
-  const posterKeyMap = new Map();
-
+  const refs = new Set();
   for (const row of deletedItems) {
-    if (!row || !row.poster) continue;
-
-    const itemLike = { category: row.category, poster: row.poster };
-    const params = buildPosterCacheParamsFromItem(itemLike);
-    if (!params) continue;
-
-    const { provider, mediaType, externalId } = params;
-    const keyStr = `${provider}||${mediaType}||${externalId}`;
-
-    if (!posterKeyMap.has(keyStr)) posterKeyMap.set(keyStr, params);
+    if (row?.poster_ref) refs.add(String(row.poster_ref));
   }
+  if (refs.size === 0) return;
 
-  if (posterKeyMap.size === 0) return;
-
-  for (const params of posterKeyMap.values()) {
-    const { provider, mediaType, externalId } = params;
-    const externalIdKey = String(externalId);
-
+  for (const ref of refs) {
     let remaining = 0;
     try {
-      const posterRef = makePosterRef(provider, mediaType, externalIdKey);
-      const row = countItemsUsingPosterRefStmt.get(posterRef);
-      remaining = row ? row.cnt : 0;
+      const r = countItemsUsingPosterRefStmt.get(ref);
+      remaining = r ? r.cnt : 0;
     } catch (err) {
-      logError("POSTERS_PURGE", `Erreur countItemsUsingPoster pour externalId=${externalIdKey}: ${err.message}`);
+      logError("POSTERS_PURGE", `Erreur countItemsUsingPosterRef ref=${ref}: ${err.message}`);
       continue;
     }
-
     if (remaining > 0) continue;
 
+    const parts = ref.split("|");
+    if (parts.length < 3) continue;
+
+    const provider = parts[0];
+    const mediaType = parts[1];
+    const externalIdKey = parts.slice(2).join("|");
+
+    // 1) récup file_path AVANT suppression DB
+    let filePath = null;
+    try {
+      const fp = selectPosterFilePathStmt.get(provider, mediaType, externalIdKey);
+      filePath = fp?.file_path || null;
+    } catch (err) {
+      logError("POSTERS_PURGE", `Erreur select file_path ref=${ref}: ${err.message}`);
+    }
+
+    // 2) supprime entrée DB
     try {
       deletePosterStmt.run(provider, mediaType, externalIdKey);
     } catch (err) {
-      logError("POSTERS_PURGE", `Erreur suppression entrée DB poster (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey}): ${err.message}`);
+      logError("POSTERS_PURGE", `Erreur delete DB poster ref=${ref}: ${err.message}`);
     }
 
-    const fileName = buildPosterFileName(provider, mediaType, externalIdKey);
-    const absPath = path.join(POSTERS_DIR, fileName);
-
-    try {
-      if (fs.existsSync(absPath)) {
-        fs.unlinkSync(absPath);
-        logInfo("POSTERS_PURGE", `Affiche supprimée: ${absPath} (provider=${provider}, mediaType=${mediaType}, externalId=${externalIdKey})`);
+    // 3) supprime fichier
+    if (filePath) {
+      const absPath = path.join(POSTERS_DIR, filePath);
+      try {
+        if (fs.existsSync(absPath)) {
+          fs.unlinkSync(absPath);
+          logInfo("POSTERS_PURGE", `Affiche supprimée: ${absPath} (ref=${ref})`);
+        }
+      } catch (err) {
+        logError("POSTERS_PURGE", `Erreur suppression fichier ref=${ref}: ${err.message}`);
       }
-    } catch (err) {
-      logError("POSTERS_PURGE", `Erreur suppression fichier d'affiche ${absPath}: ${err.message}`);
     }
   }
+}
+
+function backfillPosterRefs() {
+  const rows = db.prepare(`
+    SELECT guid, category, poster, poster_ref
+    FROM items
+    WHERE (poster_ref IS NULL OR poster_ref = '')
+      AND poster IS NOT NULL
+      AND poster != ''
+  `).all();
+
+  const updateStmt = db.prepare(`
+    UPDATE items
+    SET poster_ref = ?, updated_at = ?
+    WHERE guid = ?
+  `);
+
+  const now = Date.now();
+  let updated = 0;
+  let skipped = 0;
+
+  for (const r of rows) {
+    let ref = null;
+
+    // 1) Si déjà en local /posters/...
+    if (typeof r.poster === "string" && r.poster.startsWith("/posters/")) {
+      ref = posterRefFromLocalPosterUrl(r.poster);
+    } else {
+      // 2) Sinon remote URL → on fabrique une ref stable (sans téléchargement)
+      const params = buildPosterCacheParamsFromItem({
+        category: r.category,
+        poster: r.poster,
+      });
+      if (params) {
+        ref = makePosterRef(params.provider, params.mediaType, String(params.externalId));
+      }
+    }
+
+    if (!ref) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      updateStmt.run(ref, now, r.guid);
+      updated++;
+    } catch (e) {
+      skipped++;
+      logWarn("POSTERS_BACKFILL", `Impossible d'update poster_ref guid=${r.guid}: ${e.message}`);
+    }
+  }
+
+  return { scanned: rows.length, updated, skipped };
 }
 
 // ============================================================================
@@ -632,9 +723,30 @@ function cleanupPostersAfterItemsPurge(deletedItems) {
 // ============================================================================
 
 function cleanupPosterOrphans() {
+  const refStats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN poster_ref IS NOT NULL AND poster_ref != '' THEN 1 ELSE 0 END) AS withRef,
+      COUNT(*) AS total
+    FROM items
+  `).get();
+
+  // Garde-fou 1 : si personne n'a de poster_ref, on ne touche à rien
+  if (refStats.total > 0 && refStats.withRef === 0) {
+    logWarn("POSTERS_CLEANUP", "ABORT: aucun item n'a de poster_ref, nettoyage bloqué pour éviter de tout supprimer.");
+    return { dbRemoved: 0, fsRemoved: 0, aborted: true };
+  }
+
+  // Garde-fou 2 : si trop peu de refs, on évite le carnage
+  const ratio = refStats.total > 0 ? (refStats.withRef / refStats.total) : 0;
+  if (refStats.total > 50 && ratio < 0.3) {
+    logWarn("POSTERS_CLEANUP", `ABORT: trop peu de poster_ref (${refStats.withRef}/${refStats.total}). Nettoyage bloqué pour éviter carnage.`);
+    return { dbRemoved: 0, fsRemoved: 0, aborted: true };
+  }
+
   let dbRemoved = 0;
   let fsRemoved = 0;
 
+  // Phase 1 : posters en DB qui ne sont plus référencés par items.poster_ref
   try {
     const orphanRowsStmt = db.prepare(`
       SELECT p.provider, p.media_type, p.external_id, p.file_path
@@ -678,55 +790,10 @@ function cleanupPosterOrphans() {
     logError("POSTERS_CLEANUP", `Erreur phase 1 (DB orpheline): ${err.message}`);
   }
 
-  try {
-    if (!fs.existsSync(POSTERS_DIR)) {
-      logWarn("POSTERS_CLEANUP", `POSTERS_DIR n'existe pas: ${POSTERS_DIR}`);
-    } else {
-      const files = fs.readdirSync(POSTERS_DIR, { withFileTypes: true });
-
-      const countByFilePathStmt = db.prepare(`
-        SELECT COUNT(*) AS cnt
-        FROM posters
-        WHERE file_path = ?
-      `);
-
-      for (const entry of files) {
-        if (!entry.isFile()) continue;
-
-        const fileName = entry.name;
-
-        if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) continue;
-
-        let used = 0;
-        try {
-          const row = countByFilePathStmt.get(fileName);
-          used = row ? row.cnt : 0;
-        } catch (err) {
-          logError("POSTERS_CLEANUP", `Erreur vérification utilisation fichier ${fileName}: ${err.message}`);
-          continue;
-        }
-
-        if (used > 0) continue;
-
-        const absPath = path.join(POSTERS_DIR, fileName);
-
-        try {
-          fs.unlinkSync(absPath);
-          fsRemoved++;
-          logInfo("POSTERS_CLEANUP", `Fichier d'affiche supprimé (orphelin FS): ${absPath}`);
-        } catch (err) {
-          logError("POSTERS_CLEANUP", `Erreur suppression fichier d'affiche (orphelin FS) ${absPath}: ${err.message}`);
-        }
-      }
-    }
-  } catch (err) {
-    logError("POSTERS_CLEANUP", `Erreur phase 2 (FS orphelin): ${err.message}`);
-  }
-
   logInfo("POSTERS_CLEANUP", `Nettoyage orphelins terminé: ${dbRemoved} entrées DB supprimées, ${fsRemoved} fichiers supprimés`);
-
   return { dbRemoved, fsRemoved };
 }
+
 
 // ============================================================================
 // STATS GLOBALES (taille BDD, affiches locales, cartes par catégorie)
@@ -1186,32 +1253,13 @@ async function fetchPosterForTitle(rawTitle, categoryRaw) {
       }));
   }
 
-  let finalPoster = poster;
-
-  if (poster) {
-    try {
-      const mediaType = kind === "series" ? "series" : "film";
-      const externalId = extractImageKeyFromUrl(poster) || `${mediaType}_${cacheKey}`;
-
-      const localUrl = await ensureLocalPoster({
-        provider: "tmdb",
-        mediaType,
-        externalId,
-        remoteUrl: poster,
-      });
-
-      if (localUrl) finalPoster = localUrl;
-    } catch (e) {
-      logError("TMDB_POSTER", `Erreur cache local poster pour "${rawTitle}" (${kind}): ${e.message}`);
-    }
-  }
-
-  if (!finalPoster) {
+  if (!poster) {
     logWarn("TMDB_NO_POSTER", `AUCUN POSTER | rawTitle="${rawTitle}" | query="${queryBase}" | year=${year != null ? year : "?"} | kind=${kind}`);
   }
 
-  posterCache.set(cacheKey, finalPoster || null);
-  return finalPoster || null;
+  posterCache.set(cacheKey, poster || null);
+  return poster || null;
+
 }
 
 // ============================================================================
@@ -1450,11 +1498,8 @@ async function syncCategory(catKey) {
         try {
           let remotePoster = null;
 
-          if (normCat === "games") {
-            remotePoster = await fetchIgdbCoverForTitle(rawTitle);
-          } else if (TMDB_API_KEY) {
-            remotePoster = await fetchPosterForTitle(rawTitle, normCat);
-          }
+          if (normCat === "games") remotePoster = await fetchIgdbCoverForTitle(displayTitle);
+          else remotePoster = await fetchPosterForTitle(rawTitle, normCat);
 
           if (remotePoster) {
             const cacheParams = buildPosterCacheParamsFromItem({
@@ -1469,6 +1514,7 @@ async function syncCategory(catKey) {
               poster = localUrl || remotePoster;
             } else {
               poster = remotePoster;
+              posterRef = null;
             }
           }
         } catch (e) {
@@ -1515,6 +1561,35 @@ async function syncCategory(catKey) {
   return items.length;
 }
 
+function stableExternalIdFromUrl(url) {
+  if (!url) return null;
+
+  const k = extractImageKeyFromUrl(url);
+  if (k && typeof k === "string" && k.length <= 255) return k.toLowerCase();
+
+  return crypto.createHash("sha1").update(String(url)).digest("hex").toLowerCase();
+}
+
+
+function parseLocalPosterFileName(fileName) {
+  // attendu: tmdb_movie_abc123.jpg  OU igdb_game_xxx.jpg
+  if (!fileName) return null;
+
+  const m = String(fileName).match(/^([a-z0-9]+)_([a-z0-9]+)_(.+)\.(jpg|jpeg|png|webp)$/i);
+  if (!m) return null;
+
+  const provider = m[1].toLowerCase();
+  const mediaType = m[2].toLowerCase();
+  const externalId = m[3]; // peut contenir des "_" => on le garde tel quel
+
+  return { provider, mediaType, externalId };
+}
+
+function fileNameFromPosterUrl(posterUrl) {
+  const m = String(posterUrl || "").match(/^\/posters\/([^\/]+)$/i);
+  return m ? m[1] : null;
+}
+
 // ============================================================================
 // HELPERS POUR LES CLES D'AFFICHES LOCALES
 // ============================================================================
@@ -1532,9 +1607,38 @@ function extractImageKeyFromUrl(url) {
   }
 }
 
+function posterRefFromLocalPosterUrl(localUrl) {
+  // attend un truc du genre: /posters/tmdb_movie_abc123.jpg
+  if (!localUrl || typeof localUrl !== "string") return null;
+
+  const m = localUrl.match(/^\/posters\/([^\/]+)\.(jpg|jpeg|png|webp)$/i);
+  if (!m) return null;
+
+  const base = m[1]; // ex: tmdb_movie_abc123
+  const parts = base.split("_");
+  if (parts.length < 3) return null;
+
+  const provider = parts[0];
+  const mediaType = parts[1];
+  const externalId = parts.slice(2).join("_"); // au cas où l'id contient des "_"
+
+  return makePosterRef(provider, mediaType, externalId);
+}
+
 function makePosterRef(provider, mediaType, externalId) {
   if (!provider || !mediaType || externalId == null) return null;
-  return `${String(provider).toLowerCase()}|${String(mediaType).toLowerCase()}|${String(externalId)}`;
+  return `${String(provider).toLowerCase()}|${String(mediaType).toLowerCase()}|${String(externalId).toLowerCase()}`;
+}
+
+function getPosterMediaType(provider, categoryKey) {
+  const p = String(provider || "").toLowerCase();
+  const cat = normalizeCategoryKey(categoryKey || "");
+
+  if (p === "igdb") return "game";
+
+  if (cat === "series" || cat === "emissions") return "tv";
+
+  return "movie";
 }
 
 function buildPosterCacheParamsFromItem(item) {
@@ -1543,40 +1647,37 @@ function buildPosterCacheParamsFromItem(item) {
   const remoteUrl = item.poster;
   if (typeof remoteUrl !== "string" || !remoteUrl.trim()) return null;
 
-  if (/^\/posters\//.test(remoteUrl)) return null;
+  // Si c’est déjà local, pas de recache ici
+  if (remoteUrl.startsWith("/posters/")) return null;
 
   const category = item.category || "film";
   const normCat = normalizeCategoryKey(category);
 
   const provider = normCat === "games" ? "igdb" : "tmdb";
-  const mediaType = normCat;
+  const mediaType = getPosterMediaType(provider, normCat);
 
-  const externalId = extractImageKeyFromUrl(remoteUrl);
+  const externalId = stableExternalIdFromUrl(remoteUrl);
   if (!externalId) return null;
 
-  return { provider, mediaType, externalId, remoteUrl };
+  return {
+    provider,
+    mediaType,
+    externalId,
+    remoteUrl,
+  };
 }
 
 async function enrichItemsWithLocalPosters(items) {
+  // Plus de téléchargement ici. Jamais.
   if (!Array.isArray(items) || items.length === 0) return items || [];
 
-  const tasks = items.map(async (item) => {
-    try {
-      const params = buildPosterCacheParamsFromItem(item);
-      if (!params) return item;
+  for (const item of items) {
+    item.posterUrl = item.poster || null;
+  }
 
-      const localUrl = await ensureLocalPoster(params);
-      item.posterUrl = localUrl || item.poster || null;
-    } catch (err) {
-      logError("POSTERS", `Erreur enrichItemsWithLocalPosters pour guid=${item.guid || "?"}: ${err.message}`);
-      item.posterUrl = item.poster || null;
-    }
-    return item;
-  });
-
-  await Promise.all(tasks);
   return items;
 }
+
 
 // ============================================================================
 // PURGE BDD (rétention)
@@ -1593,7 +1694,7 @@ function purgeOldItems(maxAgeDays) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   const selectToDeleteStmt = db.prepare(`
-    SELECT guid, category, poster
+    SELECT guid, category, poster, poster_ref
     FROM items
     WHERE added_at_ts IS NOT NULL
       AND added_at_ts > 1000000000000
@@ -1832,6 +1933,7 @@ function selectItemsFromDb(category, sort, limitParam) {
       i.added_at      AS addedAt,
       i.added_at_ts   AS addedAtTs,
       i.poster,
+      i.poster_ref    AS posterRef,
       i.page_link     AS pageLink,
       i.download_link AS download,
       i.guid,
@@ -1873,6 +1975,7 @@ function selectFavoritesFromDb(sort, limitParam) {
       i.added_at      AS addedAt,
       i.added_at_ts   AS addedAtTs,
       i.poster,
+      i.poster_ref    AS posterRef,
       i.page_link     AS pageLink,
       i.download_link AS download,
       i.guid,
@@ -2200,10 +2303,228 @@ app.get("/api/details", async (req, res) => {
 app.post("/api/admin/posters/cleanup-orphans", (req, res) => {
   try {
     const result = cleanupPosterOrphans();
+    if (result.aborted) {
+      return res.status(409).json({ ok: false, ...result, error: "Nettoyage bloqué: aucun poster_ref en base (risque de suppression totale)." });
+    }
     return res.json({ ok: true, ...result });
   } catch (err) {
     logError("POSTERS_CLEANUP", `Erreur API cleanup-orphans: ${err.message}`);
     return res.status(500).json({ ok: false, error: "Erreur pendant le nettoyage des affiches orphelines" });
+  }
+});
+
+app.post("/api/admin/posters/backfill-refs", (req, res) => {
+  try {
+    const result = backfillPosterRefs();
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    logError("POSTERS_BACKFILL", `Erreur API backfill-refs: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur pendant le backfill des poster_ref" });
+  }
+});
+
+app.post("/api/admin/posters/reindex-from-items", (req, res) => {
+  try {
+    const now = Date.now();
+
+    const rows = db.prepare(`
+      SELECT poster
+      FROM items
+      WHERE poster IS NOT NULL
+        AND poster LIKE '/posters/%'
+    `).all();
+
+    let scanned = 0;
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const r of rows) {
+      scanned++;
+
+      const fileName = fileNameFromPosterUrl(r.poster);
+      if (!fileName) { skipped++; continue; }
+
+      const parsed = parseLocalPosterFileName(fileName);
+      if (!parsed) { skipped++; continue; }
+
+      const absPath = path.join(POSTERS_DIR, fileName);
+      if (!fs.existsSync(absPath)) { skipped++; continue; }
+
+      const { provider, mediaType, externalId } = parsed;
+
+      try {
+        db.prepare(`
+          INSERT OR IGNORE INTO posters
+          (provider, media_type, external_id, file_path, created_at, last_access)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(provider, mediaType, externalId, fileName, now, now);
+
+        // si c’était déjà là, on touche juste last_access
+        db.prepare(`
+          UPDATE posters
+          SET last_access = ?
+          WHERE provider = ? AND media_type = ? AND external_id = ?
+        `).run(now, provider, mediaType, externalId);
+
+        inserted++;
+      } catch (e) {
+        logError("POSTERS_REINDEX", `Erreur insert/update ${fileName}: ${e.message}`);
+      }
+    }
+
+    return res.json({ ok: true, scanned, inserted, skipped });
+  } catch (err) {
+    logError("POSTERS_REINDEX", `Erreur: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur reindex posters depuis items" });
+  }
+});
+
+app.post("/api/admin/posters/reindex-from-folder", (req, res) => {
+  try {
+    if (!fs.existsSync(POSTERS_DIR)) {
+      return res.status(404).json({ ok: false, error: "POSTERS_DIR introuvable" });
+    }
+
+    const files = fs.readdirSync(POSTERS_DIR, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name)
+      .filter((name) => /\.(jpg|jpeg|png|webp)$/i.test(name));
+
+    const parse = (fileName) => {
+      // attendu: provider_mediaType_externalId.ext
+      // ex: tmdb_movie_abcd1234.jpg
+      const m = fileName.match(/^([a-z0-9]+)_([a-z0-9]+)_(.+)\.(jpg|jpeg|png|webp)$/i);
+      if (!m) return null;
+
+      const provider = String(m[1]).toLowerCase();
+      const mediaType = String(m[2]).toLowerCase();
+      const externalId = String(m[3]).toLowerCase();
+
+      return { provider, mediaType, externalId, file_path: fileName };
+    };
+
+    const now = Date.now();
+
+    const insertOrIgnore = db.prepare(`
+      INSERT OR IGNORE INTO posters (provider, media_type, external_id, file_path, created_at, last_access)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const updatePath = db.prepare(`
+      UPDATE posters
+      SET file_path = ?, last_access = ?
+      WHERE provider = ? AND media_type = ? AND external_id = ?
+    `);
+
+    const tx = db.transaction(() => {
+      let scanned = 0;
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const f of files) {
+        const p = parse(f);
+        scanned++;
+
+        if (!p) {
+          skipped++;
+          continue;
+        }
+
+        // tente insert, si existe déjà on force juste file_path/last_access
+        const info = insertOrIgnore.run(p.provider, p.mediaType, p.externalId, p.file_path, now, now);
+        if (info.changes > 0) {
+          inserted++;
+        } else {
+          const info2 = updatePath.run(p.file_path, now, p.provider, p.mediaType, p.externalId);
+          if (info2.changes > 0) updated++;
+          else skipped++;
+        }
+      }
+
+      return { scanned, inserted, updated, skipped };
+    });
+
+    const out = tx();
+
+    return res.json({ ok: true, ...out });
+  } catch (err) {
+    logError("POSTERS_REINDEX", `Erreur: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur reindex posters" });
+  }
+});
+
+app.post("/api/admin/posters/repair-missing", async (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT guid, category, title, raw_title, poster
+      FROM items
+      WHERE poster IS NULL OR poster = '' OR poster LIKE '/posters/%'
+    `).all();
+
+    let scanned = 0;
+    let fixed = 0;
+    let failed = 0;
+
+    for (const it of rows) {
+      scanned++;
+
+      // si c'est un local poster, check si le fichier existe
+      if (it.poster && it.poster.startsWith("/posters/")) {
+        const fileName = it.poster.replace("/posters/", "");
+        const abs = path.join(POSTERS_DIR, fileName);
+        if (fs.existsSync(abs)) continue; // OK, rien à faire
+      }
+
+      const normCat = normalizeCategoryKey(it.category || "film");
+      const searchTitle = (it.title || it.raw_title || "").toString().trim();
+      if (!searchTitle) {
+        failed++;
+        continue;
+      }
+
+      let remotePoster = null;
+
+      try {
+        if (normCat === "games") {
+          remotePoster = await fetchIgdbCoverForTitle(searchTitle);
+        } else {
+          remotePoster = await fetchPosterForTitle(searchTitle, normCat);
+        }
+      } catch (e) {
+        failed++;
+        continue;
+      }
+
+      if (!remotePoster) {
+        failed++;
+        continue;
+      }
+
+      // cache local + poster_ref
+      let finalPoster = remotePoster;
+      let posterRef = null;
+
+      const params = buildPosterCacheParamsFromItem({ category: normCat, poster: remotePoster });
+      if (params) {
+        posterRef = makePosterRef(params.provider, params.mediaType, params.externalId);
+        const localUrl = await ensureLocalPoster(params);
+        if (localUrl) finalPoster = localUrl;
+      }
+
+      db.prepare(`
+        UPDATE items
+        SET poster = ?, poster_ref = ?, updated_at = ?
+        WHERE guid = ?
+      `).run(finalPoster, posterRef, Date.now(), it.guid);
+
+      fixed++;
+    }
+
+    return res.json({ ok: true, scanned, fixed, failed });
+  } catch (err) {
+    logError("POSTERS_REPAIR", `Erreur: ${err.message}`);
+    return res.status(500).json({ ok: false, error: "Erreur repair-missing" });
   }
 });
 
@@ -2277,11 +2598,25 @@ app.post("/api/posters/refresh/:guid", async (req, res) => {
     }
 
     const now = Date.now();
+
+    let newPosterRef = null;
+
+    try {
+      const params = buildPosterCacheParamsFromItem({ category: normCat, poster: newPoster });
+      if (params) {
+        newPosterRef = makePosterRef(params.provider, params.mediaType, String(params.externalId));
+      }
+    } catch (e) {
+      logWarn("POSTERS_REFRESH", `Impossible de calculer poster_ref: ${e.message}`);
+    }
+
+
     db.prepare(`
       UPDATE items
-      SET poster = ?, updated_at = ?
+      SET poster = ?, poster_ref = ?, updated_at = ?
       WHERE guid = ?
-    `).run(finalPoster, now, guid);
+    `).run(finalPoster, newPosterRef, now, guid);
+
 
     logInfo("POSTERS_REFRESH", `Pochette mise à jour (final) pour guid=${guid}, cat=${normCat}, titre="${searchTitle}" → ${finalPoster}`);
 

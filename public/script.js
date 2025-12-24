@@ -2562,38 +2562,70 @@ statsRangeTabs.forEach((tab) => {
 
     cleanupPostersStatus.textContent = "Nettoyage en cours…";
 
+    // ==========================
+    // SAFETY GUARD (anti-carnage)
+    // ==========================
+    let fsTotal = 0;
     try {
-      const res = await fetch("/api/admin/posters/cleanup-orphans", {
-        method: "POST",
-      });
+      if (fs.existsSync(POSTERS_DIR)) {
+        const entries = fs.readdirSync(POSTERS_DIR, { withFileTypes: true });
+        fsTotal = entries.filter(e => e.isFile() && /\.(jpg|jpeg|png|webp)$/i.test(e.name)).length;
+      }
+    } catch (e) {
+      logError("POSTERS_CLEANUP", `Erreur comptage FS: ${e.message}`);
+    }
+
+    let dbTotal = 0;
+    try {
+      const r = db.prepare(`SELECT COUNT(*) AS cnt FROM posters`).get();
+      dbTotal = r ? (r.cnt || 0) : 0;
+    } catch (e) {
+      logError("POSTERS_CLEANUP", `Erreur comptage DB posters: ${e.message}`);
+    }
+
+    // Si la DB n'est pas "alignée", on bloque la phase 2.
+    // Exemple typique: tu as 1200 fichiers, mais 90 en DB => phase2 = massacre.
+    if (fsTotal > 50) {
+      const ratio = dbTotal / fsTotal;
+
+      if (dbTotal === 0 || ratio < 0.30) {
+        logWarn(
+          "POSTERS_CLEANUP",
+          `ABORT PHASE2: DB posters trop faible (${dbTotal}) vs FS (${fsTotal}) ratio=${ratio.toFixed(2)}`
+        );
+        return { dbRemoved, fsRemoved, aborted: true, reason: "db_vs_fs_ratio" };
+      }
+    }
+
+    try {
+      const res = await fetch("/api/admin/posters/cleanup-orphans", { method: "POST" });
+
+      // On lit TOUJOURS le JSON si possible (même en 409)
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
 
       if (!res.ok) {
-        throw new Error("HTTP " + res.status);
+        const msg = (data && data.error) ? data.error : ("HTTP " + res.status);
+        throw new Error(msg);
       }
 
-      const data = await res.json();
       const db = Number(data.dbRemoved);
       const fs = Number(data.fsRemoved);
-      const total =
-        (Number.isFinite(db) ? db : 0) + (Number.isFinite(fs) ? fs : 0);
+      const total = (Number.isFinite(db) ? db : 0) + (Number.isFinite(fs) ? fs : 0);
 
       if (data.ok) {
-        if (total === 0) {
-          cleanupPostersStatus.textContent =
-            "Aucune affiche orpheline à supprimer.";
-        } else {
-          cleanupPostersStatus.textContent =
-            `${total} élément${total > 1 ? "s" : ""} nettoyé${total > 1 ? "s" : ""} ` +
-            `(DB: ${Number.isFinite(db) ? db : 0}, fichiers: ${Number.isFinite(fs) ? fs : 0}).`;
-        }
+        if (total === 0) cleanupPostersStatus.textContent = "Aucune affiche orpheline à supprimer.";
+        else cleanupPostersStatus.textContent = `Nettoyage OK : DB=${db || 0}, fichiers=${fs || 0}`;
       } else {
-        cleanupPostersStatus.textContent =
-          data.error || "Erreur pendant le nettoyage des affiches.";
+        cleanupPostersStatus.textContent = data?.error || "Erreur pendant le nettoyage.";
       }
     } catch (err) {
-      console.error("cleanupOrphanPosters error:", err);
-      cleanupPostersStatus.textContent =
-        "Erreur réseau lors du nettoyage des affiches.";
+      console.error("cleanupOrphanPosters:", err);
+      cleanupPostersStatus.textContent = err.message || "Erreur réseau lors du nettoyage des affiches.";
     }
 
     await refreshPostersCount();
