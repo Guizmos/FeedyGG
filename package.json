@@ -1,6 +1,6 @@
 {
   "name": "yggfeed-db",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "main": "server.js",
   "type": "commonjs",
   "dependencies": {
